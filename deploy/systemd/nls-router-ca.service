@@ -1,0 +1,25 @@
+[Unit]
+Description=NLS Router Certificate Authority Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nls-ca
+Group=nls-ca
+EnvironmentFile=-/etc/nls-nexos-core/environment
+ExecStart=/usr/bin/nls-router-ca serve --config /etc/nls-nexos-core/router-ca.yaml
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nls-nexos-core /var/log/nls-nexos-core
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target
