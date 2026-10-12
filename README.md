@@ -2,39 +2,41 @@
 
 Router-CA trust and enrollment control-plane prototype for NLS-enabled Ubuntu routers.
 
-This repository is the server/control-plane counterpart to [NlsxNetOS-v0.1.0](https://github.com/TamilSelvam22112003/NlsxNetOS-v0.1.0).
+This repository is the intended server/control-plane counterpart to [NlsxNetOS-v0.1.0](https://github.com/TamilSelvam22112003/NlsxNetOS-v0.1.0).
 
-## Important protocol terminology
+## Protocol boundary: NLS, not TLS
 
-**NLS is the intended router-to-router data-plane/control-plane protocol.** NlsxNetOS implements an experimental NLS handshake and UDP encapsulation. This Core scaffold is not yet integrated into that NLS handshake. Its HTTP-shaped enrollment API is only an API contract/prototype; TLS must not be silently described as NLS, and no production TLS control channel is implemented here.
+NlsxNetOS contains an experimental NLS UDP handshake and encrypted data-plane encapsulation. This Core repository is **not yet integrated with that NLS wire protocol**. The FastAPI module is a developer/test scaffold; it is not the Router-CA network listener and must not be exposed as a production HTTP service.
 
-The intended end-state is:
-1. Verify routed management reachability between router and Router-CA.
-2. Enroll the router identity with a local private key and CSR, pinned CA trust and a one-time/authorized enrollment credential.
-3. Use an authenticated NLS control channel whose handshake explicitly binds both router identities and Router-CA authorization data.
-4. Distribute versioned policy/revocation state and let NLS peers derive session keys locally through ephemeral X25519/HKDF.
-5. Do not transmit raw data-plane session keys or router private keys.
+The intended production workflow is:
+1. Verify Layer-3 management reachability to the Router-CA endpoint.
+2. Generate router private keys locally and submit a CSR inside an authenticated NLS enrollment message.
+3. Require both a server bootstrap credential and router-specific enrollment authorization, bound to the fresh request, router identity and CSR key.
+4. Establish a mutually authenticated NLS control session with identity binding, anti-replay, ephemeral key agreement and key derivation.
+5. Deliver versioned policy and revocation state over that NLS session. Routers derive data-plane keys locally; the CA must not send raw symmetric session keys or receive router private keys.
 
-## Current implementation status
+Outer IP addresses required to route packets remain visible. Sensitive original endpoints and packet payload belong inside authenticated-encrypted NLS encapsulation.
 
-Implemented scaffold:
-- typed enrollment request/response models
-- SQLite router registry, request replay table, certificate index and audit table
-- CSR signature validation and CA-signed client-identity certificate generation
-- configuration model and CI unit tests
-- architecture/security/flow documentation
+## Scaffold implemented
 
-Not implemented or not integration-tested:
-- NLS control listener and NLS handshake integration
-- endpoint reachability agent and CSR/enrollment client in NlsxNetOS
-- enforced mutual-authentication and authorization for policy APIs
-- working policy distribution, CRL/OCSP lifecycle, and revocation checks
-- Debian/Ubuntu package install for Core
-- end-to-end Router ↔ Router-CA test in Ubuntu VMs
+- Typed enrollment request/response models.
+- SQLite router registry, request replay records, certificate index and audit records.
+- CSR signature checks and CA-signed router certificate creation.
+- Separate bootstrap-token and router-token authorization checks.
+- CLI for CA bootstrap and router registry registration.
+- Unit/security tests and Ubuntu 24.04 GitHub Actions CI.
 
-The current CLI deliberately refuses to start a plaintext service. Do not deploy this scaffold as a network-facing CA service or treat a passing unit-test workflow as evidence of production security.
+## Not implemented or not integration-tested
 
-## Test
+- An NLS control listener and compatible NLS control message framing.
+- Router-side CSR generation/enrollment/import integrated with NlsxNetOS.
+- Certificate validation and identity binding over a live NLS control session.
+- Policy delivery, operational revocation/CRL/OCSP, certificate renewal and rotation.
+- A packaged Core installation and end-to-end Router ↔ Router-CA enrollment across Ubuntu VMs.
+
+The CLI intentionally refuses to start a plaintext listener. A passing Core CI verifies the local scaffold only; it does not prove network interoperability or production security. Do not deploy the scaffold as a network-facing CA.
+
+## Test the current scaffold
 
 ```bash
 python3 -m pip install -e ".[test]"
@@ -42,8 +44,4 @@ python3 -m compileall -q src tests
 pytest -q
 ```
 
-See:
-- `docs/ARCHITECTURE.md`
-- `docs/BOOT_ENROLLMENT_FLOW.md`
-- `docs/SECURITY_MODEL.md`
-- `docs/API_SPECIFICATION.md`
+See `docs/ARCHITECTURE.md`, `docs/BOOT_ENROLLMENT_FLOW.md`, `docs/SECURITY_MODEL.md`, and `docs/API_SPECIFICATION.md`.

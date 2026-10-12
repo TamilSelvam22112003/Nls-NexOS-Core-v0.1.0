@@ -2,46 +2,33 @@
 
 ## Repository roles
 
-- **Nls-NexOS-Core** runs Router-CA control-plane services: registered router inventory, enrollment authorization, certificate issuance, revocation/status management, audit records, and a management API.
-- **NlsxNetOS** runs on edge routers: local identity/key management, management reachability checks, CSR generation, certificate validation/storage, mTLS control client, and NLS session/policy consumer.
+- **Nls-NexOS-Core** is intended to provide Router-CA enrollment, router authorization, CA-signed identity certificates, revocation state, audit and policy distribution.
+- **NlsxNetOS** runs at edge routers and owns local key generation, Layer-3 diagnostics, NLS handshake/data-plane encapsulation, certificate storage/validation, and the NLS control client.
+- The Router-CA is a control-plane service, not a transit router. Forwarding remains in NlsxNetOS/Linux routing.
 
-The Core repository must not implement a second packet-forwarding path. NLS data-plane packet protection and forwarding belong to NlsxNetOS.
+## Required four phases
 
-## Required four-phase workflow
+1. **Layer-3 reachability:** verify the management route to the Router-CA endpoint and use ping/traceroute as diagnostics. ICMP reachability does not authenticate the Router-CA.
+2. **PKI enrollment:** generate the router key locally and sign a CSR. Submit the CSR, router ID, fresh request ID/nonce/timestamp, a server bootstrap credential and a router-specific enrollment token inside an authenticated NLS enrollment exchange. The CA validates registry status, both credential gates, CSR signature/key binding, freshness and replay state before issuing a constrained certificate.
+3. **Mutual NLS control channel:** establish a persistent, mutually authenticated NLS control session. The handshake must bind the router and CA identities, use signed ephemeral key agreement, derive session keys with HKDF, and reject replayed or stale messages. The Core repository does not yet implement this listener or integrate the NLS handshake.
+4. **Policy/session sync:** distribute versioned policy and authenticated revocation state over the NLS control session. Data-plane peers derive traffic keys locally; the CA must not send raw symmetric keys or receive router private keys.
 
-1. **L3 reachability:** verify the IPv6 route and use ping/traceroute as diagnostics. Then verify the service with HTTPS using the pre-provisioned, pinned Router-CA root. Ping alone does not authenticate the service.
-2. **PKI enrollment:** generate the router private key locally, create a CSR, and submit it with a fresh request ID/nonce/timestamp plus an authorized bootstrap credential over validated TLS. The CA checks registration, authorization policy, CSR signature, key binding, freshness and replay state before signing a constrained certificate.
-3. **Mutual NLS control channel:** establish TLS 1.3 mutual authentication with server and client certificate validation. The server must map the verified certificate identity to an active registry record and authorization policy. Use separate bootstrap and authenticated-control policy.
-4. **Session/policy synchronization:** deliver versioned policy and authenticated revocation state over mTLS. NLS peers perform ephemeral X25519/HKDF key agreement bound to the authenticated handshake. Do not transmit raw symmetric data-plane keys.
+## NLS and address confidentiality
 
-## Address confidentiality
-
-Ordinary IPv6 forwarding requires a usable outer destination address, so the outer IPv6 source/destination fields remain visible to transit IP routers. Sensitive original source/destination metadata and the original IP packet belong inside an NLS inner packet protected by authenticated encryption. Encrypting only a destination field in the ordinary outer IPv6 header is not compatible with normal routing.
+Ordinary IP forwarding requires a routable outer destination address; the outer IPv6 source/destination fields remain visible to transit IP routers. Private original endpoints and the inner IP packet belong in authenticated-encrypted NLS encapsulation. Encrypting only the ordinary outer destination field is incompatible with standard IP forwarding.
 
 ## Trust boundaries
 
-- Never transmit router private keys. Generate them locally and restrict filesystem access.
-- A MAC or IP address is inventory data, not strong cryptographic identity proof. Identity should be bound to private-key possession and an approved enrollment credential or hardware attestation.
-- The CA signing key must be separated from the database and strongly protected; production should use an offline or HSM-backed key where practical.
-- Use parameterized database queries, uniqueness constraints, bounded inputs, anti-replay controls, strict certificate profiles, and audit events.
-- Bootstrap credentials must be high entropy, protected, rate-limited, and rotated or invalidated after initial enrollment.
+- Generate and store router private keys locally. Never transmit them.
+- IP/MAC addresses are inventory attributes, not cryptographic identity proofs.
+- Pin the Router-CA trust anchor out-of-band before first enrollment; authenticate the CA before sending bootstrap credentials.
+- Keep the CA signing key separate from the registry and protect it with offline/HSM-backed custody where practical.
+- Use distinct bootstrap and router-specific enrollment credentials, parameterized database queries, unique request IDs, nonce/freshness checks, bounded input, strict certificate profiles and audit events.
 
-## Proposed source tree
+## Current code boundary
 
-```text
-src/nls_nexos_core/
-  api.py                 enrollment and health API
-  auth.py                credential and client identity authorization
-  ca.py                  CA-signed certificate issuance
-  cli.py                 bootstrap, registration and server commands
-  config.py              validated settings
-  database.py            registry, replay, certificate and audit tables
-  models.py              typed protocol models
-  service.py             enrollment business logic
-  tls.py                 TLS and certificate validation helpers
-  errors.py              stable API errors
-```
+The Core repository contains certificate/registry business logic and a developer-only FastAPI adapter. It does **not** implement an NLS network listener, Router-CA NLS handshake, or live NLS enrollment. The adapter is not a protocol replacement and must not be exposed as the production transport.
 
-## Explicitly incomplete in this prototype
+## Explicitly incomplete
 
-The initial repository scaffold does not yet provide a complete production HTTPS listener, post-enrollment mTLS enforcement, working policy/revocation endpoints, a router enrollment client integrated into NlsxNetOS, Debian packaging, or a successful end-to-end Ubuntu VM test. Do not expose it to untrusted networks until those gaps are closed and security-reviewed.
+NLS control framing/listener, router-side enrollment agent, certificate import/validation on NlsxNetOS, control-session policy/revocation messaging, renewal/rotation, Debian packaging and end-to-end multi-VM validation remain incomplete.

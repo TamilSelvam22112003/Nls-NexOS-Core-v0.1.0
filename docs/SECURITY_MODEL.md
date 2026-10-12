@@ -1,13 +1,21 @@
 # Security Model
 
-Protect the CA signing key, router private keys, enrollment credentials, router inventory, certificates and NLS session material.
+## Protected assets
 
-- Pin the CA root and verify its server certificate before transmitting credentials.
-- Never transmit router private keys. Generate and store them locally with restrictive permissions.
-- Use an allow-list, authorized bootstrap credential, signed CSR/key-possession proof, freshness checks and persistent replay records.
-- Treat MAC and IP as inventory attributes, not identity proof by themselves.
-- Validate certificates for issuer, validity, identity and purpose; support short-lived credentials and revocation.
-- Use parameterized SQL, request-size bounds, rate limits, sanitized audit logs and access-controlled registry files.
-- Keep CA signing key outside the router database; use offline/HSM protection for production where possible.
+CA signing key, router private keys, bootstrap/enrollment credentials, registry/authorization policies, router identity certificates, revocation state, and NLS session key material.
 
-TPM attestation, HSM operation, HA, full CRL/OCSP service, production mTLS authorization and independent security review remain out of scope for the initial prototype.
+## Required controls
+
+- Pin the Router-CA trust anchor before first enrollment. Authenticate the CA identity using the NLS protocol, not an unauthenticated reachability result.
+- Never transmit router private keys. Generate them locally and enforce restrictive filesystem permissions.
+- Require both a server bootstrap credential and a distinct router-specific token bound to a registered router identity.
+- Validate the CSR signature, expected key binding, router allow-list/status, and certificate purpose/identity.
+- Apply freshness windows, unique request IDs, nonces and a persistent replay store.
+- Treat MAC/IP as inventory information, not identity proof.
+- Use parameterized SQL, request-size bounds, rate limiting, sanitized audit logs and access-controlled registry files.
+- Keep the CA signing key separate from the database and protect it with offline/HSM custody where practical.
+- Use NLS authenticated encryption and identity-bound key derivation for control messages. Derive data-plane symmetric keys locally, and never log or transmit them in plaintext.
+
+## Out of scope and release blockers
+
+The current Core scaffold has no NLS network listener or mutual NLS control handshake; policy/revocation services, certificate renewal/rotation, TPM attestation, HSM integration, HA and independent protocol/security review remain incomplete. Do not call this production-ready until those items are implemented and tested on clean Ubuntu VMs.

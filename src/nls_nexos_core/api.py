@@ -23,7 +23,7 @@ def create_app(settings=None):
   except EnrollmentDenied as exc:raise HTTPException(status_code=403,detail='enrollment denied') from exc
   except Exception as exc:logging.exception('enrollment internal error');raise HTTPException(status_code=500,detail='internal error') from exc
  @app.get('/api/v1/policy')
- async def policy():raise HTTPException(status_code=501,detail='mTLS policy endpoint not implemented')
+ async def policy():raise HTTPException(status_code=501,detail='NLS policy channel not implemented')
  @app.get('/api/v1/revocation')
  async def revocation():raise HTTPException(status_code=501,detail='revocation endpoint not implemented')
  return app
