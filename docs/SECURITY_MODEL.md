@@ -2,20 +2,22 @@
 
 ## Assets
 
-CA signing key, NLS control identity key, router private keys, bootstrap and per-router tokens, router registry, issued certificates, policy and revocation state, and NLS data-plane session key material.
+CA signing key, NLS control identity key, router private keys, bootstrap and per-router tokens, router registry, issued certificates, policy/revocation state, and NLS data-plane session key material.
 
-## Controls
+## Current controls
 
-- Routers pin the Router-CA Ed25519 control public key out-of-band. The server cannot replace this trust pin during a network handshake.
-- Router certificate signing uses a separate CA signing key and a pre-provisioned CA root certificate.
-- Router private keys are generated and stored locally; they never leave the device.
-- First enrollment requires a signed CSR, freshness/replay controls, an approved router ID, a global bootstrap credential and a router-specific credential inside an authenticated encrypted record.
-- Subsequent NLS control connections carry the issued certificate. Router-CA verifies signature, validity, Ed25519 key binding, identity, registry status and certificate revocation status.
-- The control protocol uses ephemeral X25519, transcript-bound HKDF-SHA-256, independent directional AES-256-GCM keys, deterministic per-direction nonces, and strict sequence checks.
-- Policy/revocation responses are carried in the encrypted record layer. Raw symmetric session keys are derived locally rather than sent from the CA.
-- SQLite statements are parameterized. Enrollment request IDs and nonces are unique; audit records do not contain credentials or private keys.
-- Bootstrap token files must be high-entropy and owner-only; restrict Router-CA port 4790 to the management network.
+- Routers pin the Router-CA Ed25519 control public key out-of-band.
+- Router certificate signing uses a separate CA signing key and pre-provisioned CA root certificate.
+- Router private keys are generated/stored locally and never transmitted.
+- First enrollment requires signed CSR proof, freshness/replay checks, a registered router, a global bootstrap credential and a router-specific credential inside an encrypted record.
+- Subsequent NLS control sessions require an issued identity certificate with matching Ed25519 key, valid issuer/time/EKU, active registry entry, and non-revoked serial.
+- Control records use ephemeral X25519, transcript-bound HKDF-SHA-256, directional AES-256-GCM, and strict record sequence validation.
+- SQL statements are parameterized; enrollment request IDs/nonces are persistent and uniqueness-constrained; logs exclude credentials.
 
-## Known limitations
+## Important qualification
 
-NLS Control Record Protocol v1 is custom, experimental cryptography and has not received independent protocol review or formal verification. It does not currently include TPM attestation, HSM operation, automated certificate renewal, high availability, robust rate limiting, administrator authentication/API, production CRL/OCSP publishing, or tested multi-host internet exposure. Do not deploy to critical or untrusted production networks until the protocol is reviewed and these operational controls are implemented.
+The NLS Control Record Protocol is **custom experimental cryptography, not TLS**. Code and CI success do not establish cryptographic soundness. It has not received independent cryptographic review, formal verification, or hostile-network interoperability testing. Do not deploy to critical or untrusted production networks until the wire protocol is reviewed and signed off by qualified cryptographers.
+
+## Remaining operational work
+
+TPM attestation, HSM protection, HA, automated certificate renewal, robust rate limiting, administrator authentication/API, signed CRL/OCSP publishing, revocation refresh/expiry policy, and multi-host IPv6 testing.

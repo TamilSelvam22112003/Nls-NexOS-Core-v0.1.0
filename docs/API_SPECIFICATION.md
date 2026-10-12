@@ -1,30 +1,28 @@
 # NLS Control Record Protocol v1: Control Operations
 
-This is a framed NLS control protocol over TCP, not an HTTP REST API. The default listen port is 4790. All application operations after the signed handshake are JSON objects carried in AES-256-GCM-protected records with strict directional sequence numbers.
+This repository implements a **custom experimental NLS control protocol over TCP**. It is not TLS, not HTTP, and does not claim interoperability with TLS implementations. The default control port is 4790; NLS user-data transport remains separate (typically UDP 4789).
 
-## Handshake
+## Handshake and records
 
-- `CLIENT_HELLO`: router ID, Ed25519 public key, ephemeral X25519 public key, fresh nonce, timestamp, optional Router-CA-issued certificate, and Ed25519 signature.
-- `SERVER_HELLO`: pinned CA control identity ID/public key, ephemeral X25519 public key, fresh nonce, timestamp, client-hello transcript hash, client-authentication state, and Ed25519 signature.
-- Both sides derive directional record keys from ephemeral X25519 with HKDF-SHA-256 bound to the complete signed transcript and verify encrypted Finished records before sending control requests.
+The protocol uses Ed25519-signed hello messages, a pre-provisioned Router-CA control public-key pin, fresh X25519 ephemeral key agreement, transcript-bound HKDF-SHA-256 derivation, directional AES-256-GCM records, bounded framing and strict monotonic sequence numbers. Each peer confirms the derived session transcript before sending application messages.
 
-## Application messages
+These measures are an experimental design, not a substitute for an independent cryptographic review. The wire protocol has not been formally verified or audited and must not be used for critical production/defence traffic before review.
 
-- `health`: returns the service ID and protocol version. It does not grant enrollment or control privileges.
-- `enroll`: contains an enrollment request (router ID, signed CSR, unique request ID, nonce, timestamp, optional claimed IPv6/MAC), global bootstrap token and router-specific token. Both tokens travel inside encrypted records.
-- `sync`: requires a current Router-CA-issued client certificate and returns versioned policy and revoked-certificate state.
-- `heartbeat`: requires a current certificate and returns server time, policy and revocation state on the persistent channel.
-- `status`: requires a current certificate and returns router ID, certificate serial, policy and revocation state.
+## Messages
+
+- `health`: service and protocol readiness.
+- `enroll`: CSR, request ID, nonce, timestamp, global bootstrap credential, and router-specific credential, carried inside encrypted records.
+- `sync`: requires a valid Router-CA-issued identity certificate and returns versioned policy/revocation state.
+- `heartbeat`: requires a valid certificate and returns updated policy/revocation state on a persistent connection.
+- `status`: requires a valid certificate and returns the authenticated router identity and certificate serial.
 - `close`: closes the record channel.
 
-## Enrollment response
+## Identity and key handling
 
-The successful `enrollment-result` contains the signed router identity certificate, CA root certificate, serial, validity, policy and revocation bundle. The client must compare the returned root certificate against its pre-provisioned trust anchor and validate the certificate before installing it. Private keys and raw symmetric session keys are never returned.
+The router private key never leaves the router. Router-CA signs an identity certificate only after validating the CSR signature, registry authorization, credentials, freshness and anti-replay state. Subsequent control connections validate issuer, validity, certificate purpose, public-key binding, registry status and revocation state.
 
-## Revocation
+The peers derive NLS data-plane session keys locally through X25519/HKDF. The CA sends policy parameters, never raw symmetric keys. Ordinary outer IP destination fields needed for routing remain visible; protected original endpoints and packet payload belong inside an authenticated-encrypted NLS inner packet.
 
-`nls-router-ca revoke-certificate SERIAL` marks an active certificate revoked. The next new NLS control session with that certificate is refused; connected routers receive revocation state during heartbeats. Production deployments still need a defined revocation refresh/expiry policy and operational CA-key protection.
+## Revocation and limitations
 
-## Compatibility and security status
-
-This is an experimental custom protocol; do not claim wire compatibility with a standard protocol. Its cryptographic profile and implementation require independent review before production use.
+`nls-router-ca revoke-certificate SERIAL` marks an active certificate revoked. New control connections are refused and connected peers receive revocation state during heartbeats. Robust refresh/expiry policy, signed CRL/OCSP distribution, automated certificate renewal, TPM/HSM support, administration API and rate limiting remain future work.
