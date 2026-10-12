@@ -1,0 +1,9 @@
+router_ca:
+  endpoint: "https://[2001:db8::10]:8443"
+  ca_certificate: "/etc/nlsxnetos/router-ca/ca-root.crt"
+  router_id: "router-001"
+  enrollment_token_file: "/etc/nlsxnetos/router-ca/enrollment-token"
+  key_path: "/var/lib/nlsxnetos/identity/enrollment.key"
+  certificate_path: "/var/lib/nlsxnetos/identity/router.crt"
+  certificate_chain_path: "/var/lib/nlsxnetos/identity/chain.pem"
+  request_timeout_seconds: 10
