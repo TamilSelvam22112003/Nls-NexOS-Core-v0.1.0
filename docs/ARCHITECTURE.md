@@ -1,34 +1,42 @@
-# Architecture
+# NLS Router-CA Architecture
 
-## Repository roles
+## Responsibilities
 
-- **Nls-NexOS-Core** is intended to provide Router-CA enrollment, router authorization, CA-signed identity certificates, revocation state, audit and policy distribution.
-- **NlsxNetOS** runs at edge routers and owns local key generation, Layer-3 diagnostics, NLS handshake/data-plane encapsulation, certificate storage/validation, and the NLS control client.
-- The Router-CA is a control-plane service, not a transit router. Forwarding remains in NlsxNetOS/Linux routing.
+- **Nls-NexOS-Core** runs Router-CA control services, router registration, enrollment authorization, X.509 certificate issuance, revocation state, policy versions and audit records.
+- **NlsxNetOS** runs on edge routers and owns local identity keys, CSR generation, the NLS control client, the NLS data plane, and policy/revocation cache.
+- Router-CA is not a user-packet forwarding hop.
 
-## Required four phases
+## Four-phase connection sequence
 
-1. **Layer-3 reachability:** verify the management route to the Router-CA endpoint and use ping/traceroute as diagnostics. ICMP reachability does not authenticate the Router-CA.
-2. **PKI enrollment:** generate the router key locally and sign a CSR. Submit the CSR, router ID, fresh request ID/nonce/timestamp, a server bootstrap credential and a router-specific enrollment token inside an authenticated NLS enrollment exchange. The CA validates registry status, both credential gates, CSR signature/key binding, freshness and replay state before issuing a constrained certificate.
-3. **Mutual NLS control channel:** establish a persistent, mutually authenticated NLS control session. The handshake must bind the router and CA identities, use signed ephemeral key agreement, derive session keys with HKDF, and reject replayed or stale messages. The Core repository does not yet implement this listener or integrate the NLS handshake.
-4. **Policy/session sync:** distribute versioned policy and authenticated revocation state over the NLS control session. Data-plane peers derive traffic keys locally; the CA must not send raw symmetric keys or receive router private keys.
+1. **Reachability:** establish ordinary IPv6 management reachability to the configured Router-CA endpoint. Route/ping/traceroute diagnostics confirm network reachability only; the pinned NLS control handshake authenticates the service.
+2. **Enrollment:** router creates an Ed25519 private key and CSR locally. The first NLS control handshake is pinned to the Router-CA Ed25519 control public key provisioned out-of-band. A fresh encrypted enrollment request contains the CSR, request ID, nonce, timestamp, global bootstrap credential, and router-specific credential. Router-CA validates both tokens, router registry state, CSR signature, key binding, time window and replay state before certificate issuance.
+3. **Mutual NLS control:** router reconnects and presents its Router-CA-signed identity certificate in the signed NLS hello. Router-CA validates the certificate against its signing root, validity, Ed25519 key binding, router identity, active registry record and certificate status. The router independently verifies the Router-CA’s pinned control identity.
+4. **Policy/revocation synchronization:** a persistent TCP channel uses encrypted heartbeat and sync messages. Router-CA sends a versioned policy profile and certificate revocation state. NLS session keys are derived by the peers with ephemeral X25519/HKDF; the server does not distribute raw symmetric keys.
 
-## NLS and address confidentiality
+## Control wire protocol
 
-Ordinary IP forwarding requires a routable outer destination address; the outer IPv6 source/destination fields remain visible to transit IP routers. Private original endpoints and the inner IP packet belong in authenticated-encrypted NLS encapsulation. Encrypting only the ordinary outer destination field is incompatible with standard IP forwarding.
+NLS Control Record Protocol v1 uses a framed TCP stream:
+- 4-byte `NLSC` magic, protocol version, record kind and a bounded length
+- Ed25519-signed client/server hello messages with timestamp, fresh nonce and transcript binding
+- ephemeral X25519 shared secret; HKDF-SHA-256 key schedule bound to the complete signed handshake transcript
+- separate client-to-server and server-to-client AES-256-GCM keys
+- deterministic directional nonce prefix plus a strict 64-bit monotonically increasing sequence number per direction
+- encrypted, schema-checked JSON control requests and responses
 
-## Trust boundaries
+The router data plane remains NLS UDP (default port 4789); Router-CA control defaults to TCP port 4790. The two protocols have different framing and purposes.
 
-- Generate and store router private keys locally. Never transmit them.
-- IP/MAC addresses are inventory attributes, not cryptographic identity proofs.
-- Pin the Router-CA trust anchor out-of-band before first enrollment; authenticate the CA before sending bootstrap credentials.
-- Keep the CA signing key separate from the registry and protect it with offline/HSM-backed custody where practical.
-- Use distinct bootstrap and router-specific enrollment credentials, parameterized database queries, unique request IDs, nonce/freshness checks, bounded input, strict certificate profiles and audit events.
+## Address privacy
 
-## Current code boundary
+Ordinary IP forwarding requires a routable outer destination address, so the outer IP destination remains visible to transit routers. NLS encapsulation must place sensitive original endpoint metadata and the inner packet inside authenticated encryption. Do not encrypt only the outer IP destination field and expect normal routers to forward it.
 
-The Core repository contains certificate/registry business logic and a developer-only FastAPI adapter. It does **not** implement an NLS network listener, Router-CA NLS handshake, or live NLS enrollment. The adapter is not a protocol replacement and must not be exposed as the production transport.
+## Keys and trust
 
-## Explicitly incomplete
+- The CA signing private key signs router identity certificates and is separate from the Ed25519 NLS control identity key.
+- Routers must pin the Router-CA control identity key and install the CA root certificate through a trusted out-of-band procedure before enrollment.
+- Router and CA private keys never cross the network.
+- IP/MAC metadata is not proof of identity. Token authorization plus CSR key-possession proof is used for first enrollment; subsequent control sessions require an active CA-issued identity certificate.
+- The NLS control protocol is experimental custom cryptography and must receive independent review before production use.
 
-NLS control framing/listener, router-side enrollment agent, certificate import/validation on NlsxNetOS, control-session policy/revocation messaging, renewal/rotation, Debian packaging and end-to-end multi-VM validation remain incomplete.
+## Remaining work
+
+Independent cryptographic review; formally versioned wire specification; certificate renewal/rotation automation; production CRL/OCSP; TPM/HSM support; rate limiting and administrator APIs; and a multi-host IPv6 deployment test beyond the CI loopback integration test.

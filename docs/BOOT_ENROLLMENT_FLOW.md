@@ -1,34 +1,68 @@
-# Boot Enrollment Flow
+# Boot and Enrollment Flow
 
-## 1. Layer-3 reachability
+## 1. L3 reachability
 
-Provision the Router-CA management IPv6 address and trust anchor out-of-band. Confirm there is a route before starting NLS enrollment. Example diagnostics (replace the documentation address and interface):
+Copy the Router-CA root certificate, pinned Ed25519 NLS control public key, and enrollment credentials to the router through a trusted provisioning channel. Configure the correct CA management address and route.
 
 ```bash
 ip -6 route get 2001:db8::10
-ping -6 -I <management-interface> -c 3 2001:db8::10
+ping -6 -c 3 2001:db8::10
 tracepath6 2001:db8::10
 ```
 
-ICMP can be filtered. A future NLS `NLS_CA_PROBE` exchange must authenticate the CA identity; that probe is not implemented in the current Core scaffold.
+Replace the documentation address with the actual server address. These commands test reachability; the NLS Control v1 handshake authenticates the peer. The Router-CA listener is TCP port 4790 by default; the router-to-router NLS data plane uses UDP port 4789.
 
-## 2. Cryptographic identity and enrollment
+## 2. Router-CA initialization
 
-1. Generate the router private key locally with restrictive permissions.
-2. Create a CSR and sign it with the local private key; never transmit the private key.
-3. Send an `NLS_ENROLL_REQUEST` inside an authenticated-encrypted NLS bootstrap exchange to the configured Router-CA endpoint.
-4. Include a fresh request ID, nonce, timestamp, router identity, signed CSR, server bootstrap credential and per-router enrollment token.
-5. The CA verifies the CSR signature, router allow-list/status, both credential gates, expected public-key binding, freshness and replay state.
-6. The CA returns a constrained signed router identity certificate and CA chain. The router validates issuer, signature, validity, expected identity and purpose, then atomically installs the certificate.
+On the CA host, install dependencies and the Core package/source environment, copy `config/router-ca.example.yaml` to the configured server path, and initialize keys:
 
-The NLS bootstrap/control listener and the router-side enrollment agent required by these steps are **not yet implemented** in the two-repository workflow.
+```bash
+nls-router-ca --config /etc/nls-nexos-core/router-ca.yaml init
+```
 
-## 3. Mutual NLS control channel
+The command reports the root certificate, root SHA-256 fingerprint, and Ed25519 NLS control public key. Keep the CA signing key and bootstrap token private; distribute only the root certificate, control public-key pin and authorized per-router enrollment credential to the intended router.
 
-After certificate installation, establish the persistent NLS control session. It must authenticate both peer identities, bind them into the handshake transcript, perform ephemeral key agreement, derive keys with HKDF, and enforce sequence/replay windows. A standard TLS channel is not a substitute for the requested NLS protocol.
+Register the router using a protected token file:
 
-## 4. Policy, revocation and data-plane keys
+```bash
+nls-router-ca --config /etc/nls-nexos-core/router-ca.yaml register-router router-001 --token-file /secure/path/router-001.token
+nls-router-ca --config /etc/nls-nexos-core/router-ca.yaml serve
+```
 
-Once the mutual NLS control session is established, synchronize versioned policy and authenticated revocation state. Routers derive data-plane session keys locally from authenticated ephemeral key agreement; never transmit raw symmetric keys. Expose states such as `NO_ROUTE`, `CA_UNREACHABLE`, `ENROLLMENT_REQUIRED`, `CERTIFICATE_INVALID`, `NLS_CONTROL_READY`, `POLICY_SYNCED` and `NLS_SESSION_READY`.
+The token file must contain at least 32 random characters. The global bootstrap token comes from `/etc/nls-nexos-core/enrollment-token`.
 
-Outer IP addresses required for normal routing remain visible. Sensitive original endpoints and packet payload belong inside NLS authenticated encryption.
+## 3. Router configuration and enrollment
+
+1. Install the CA root certificate as `/etc/nlsxnetos/router-ca/ca-root.crt`.
+2. Copy the global bootstrap token to `/etc/nlsxnetos/router-ca/bootstrap.token` and this router’s registered token to `/etc/nlsxnetos/router-ca/router.token`. Set both token files to owner `nlsxnetos` and mode `0600`.
+3. Edit `/etc/nlsxnetos/router-ca-client.yaml`: set the correct `endpoint`, `server_id`, base64 `server_public_key` printed by the CA `init` command, router ID and paths. Do not leave the placeholder public key.
+4. Enroll the router; its Ed25519 private key remains local.
+
+```bash
+sudo nlsxnetos router-ca-client enroll --config /etc/nlsxnetos/router-ca-client.yaml
+```
+
+The router validates that the returned root matches its pre-provisioned root certificate, verifies the issued leaf signature/validity/EKU/router identity, checks the leaf public key matches its local private key, then installs the certificate atomically.
+
+## 4. Persistent mutual NLS control channel
+
+Enable the client only after provisioning all fields and files:
+
+```bash
+sudo systemctl enable --now nls-ca-client.service
+sudo ss -tnp | grep ':4790'
+sudo journalctl -u nls-ca-client.service -f
+```
+
+The client reconnects with the issued certificate, validates policy and revocation responses, and sends periodic encrypted heartbeats. Router-CA validates each certificate against the trust root and active registry row. Invalid, expired or revoked certificates are rejected.
+
+## 5. Verification
+
+```bash
+sudo nlsxnetos router-ca-client status --config /etc/nlsxnetos/router-ca-client.yaml
+sudo cat /var/lib/nlsxnetos/security/nls-policy.json
+sudo cat /var/lib/nlsxnetos/security/nls-revocations.json
+sudo ls -l /var/lib/nlsxnetos/identity/router.crt
+```
+
+A successful enrollment alone does not mean the NLS user-data plane is running. The router's own NLS data-plane service and its peer/route configuration must also be enabled and validated.

@@ -1,30 +1,30 @@
-# Router-CA NLS Control Protocol — Proposed v1
+# NLS Control Record Protocol v1: Control Operations
 
-This is a wire-protocol target, not an implemented listener. Production Router-CA traffic must use NLS control messages integrated with the NLS protocol in NlsxNetOS; do not deploy the developer-only HTTP-shaped adapter as the network transport.
+This is a framed NLS control protocol over TCP, not an HTTP REST API. The default listen port is 4790. All application operations after the signed handshake are JSON objects carried in AES-256-GCM-protected records with strict directional sequence numbers.
 
-## Common control envelope
+## Handshake
 
-Each control message should be carried inside an authenticated-encrypted NLS session and include:
-- protocol version and message type
-- router identity and intended CA identity
-- monotonically increasing request/sequence number
-- cryptographically random nonce and timestamp/expiry
-- request/correlation ID
-- length-bounded message payload and authenticated transcript binding
+- `CLIENT_HELLO`: router ID, Ed25519 public key, ephemeral X25519 public key, fresh nonce, timestamp, optional Router-CA-issued certificate, and Ed25519 signature.
+- `SERVER_HELLO`: pinned CA control identity ID/public key, ephemeral X25519 public key, fresh nonce, timestamp, client-hello transcript hash, client-authentication state, and Ed25519 signature.
+- Both sides derive directional record keys from ephemeral X25519 with HKDF-SHA-256 bound to the complete signed transcript and verify encrypted Finished records before sending control requests.
 
-Reject unknown protocol versions, invalid identities, expired timestamps, duplicate request IDs/nonces, malformed fields, unauthorized operations and invalid authentication tags. Control-message parsing must be strict and bounded.
+## Application messages
 
-## Proposed message types
+- `health`: returns the service ID and protocol version. It does not grant enrollment or control privileges.
+- `enroll`: contains an enrollment request (router ID, signed CSR, unique request ID, nonce, timestamp, optional claimed IPv6/MAC), global bootstrap token and router-specific token. Both tokens travel inside encrypted records.
+- `sync`: requires a current Router-CA-issued client certificate and returns versioned policy and revoked-certificate state.
+- `heartbeat`: requires a current certificate and returns server time, policy and revocation state on the persistent channel.
+- `status`: requires a current certificate and returns router ID, certificate serial, policy and revocation state.
+- `close`: closes the record channel.
 
-- `NLS_CA_PROBE` / `NLS_CA_PROBE_RESPONSE`: authenticated service reachability and identity.
-- `NLS_ENROLL_REQUEST`: router ID, signed CSR, request ID/nonce/timestamp, server bootstrap credential and router-specific enrollment credential.
-- `NLS_ENROLL_RESPONSE`: CA-signed router certificate, CA chain, serial number and validity interval. Never include a private key.
-- `NLS_POLICY_REQUEST` / `NLS_POLICY_RESPONSE`: versioned policy bound to the authenticated router identity.
-- `NLS_REVOCATION_REQUEST` / `NLS_REVOCATION_RESPONSE`: authenticated current revocation state or signed CRL.
-- `NLS_ERROR`: stable error code and correlation ID, no secret material.
+## Enrollment response
 
-The bootstrap credential and the per-router enrollment token are separate secrets. The router token must match the registry hash for that router; the bootstrap token must pass the server bootstrap gate. Credentials must be inside the authenticated-encrypted NLS envelope, not in plaintext or logs.
+The successful `enrollment-result` contains the signed router identity certificate, CA root certificate, serial, validity, policy and revocation bundle. The client must compare the returned root certificate against its pre-provisioned trust anchor and validate the certificate before installing it. Private keys and raw symmetric session keys are never returned.
 
-## Current implementation status
+## Revocation
 
-The Pydantic request/response models, registry checks, replay store and CA-signed certificate generation exist. The Core API module is a developer-only adapter, and the CLI deliberately refuses to start a plaintext listener. The NLS wire listener, NLS handshake integration, policy API, revocation service and router-side enrollment client are not implemented or end-to-end tested yet.
+`nls-router-ca revoke-certificate SERIAL` marks an active certificate revoked. The next new NLS control session with that certificate is refused; connected routers receive revocation state during heartbeats. Production deployments still need a defined revocation refresh/expiry policy and operational CA-key protection.
+
+## Compatibility and security status
+
+This is an experimental custom protocol; do not claim wire compatibility with a standard protocol. Its cryptographic profile and implementation require independent review before production use.

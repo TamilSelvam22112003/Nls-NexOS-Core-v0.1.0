@@ -1,7 +1,13 @@
 server:
   host: "::"
-  port: 8443
-  log_level: "INFO"
+  port: 4790
+  control_id: "nls-router-ca"
+  identity_key: "/var/lib/nls-nexos-core/identity/control-ed25519.key"
+  policy_version: 1
+  replay_window: 64
+  max_clock_skew_seconds: 120
+  session_timeout_seconds: 300
+  key_rotation_seconds: 3600
 database:
   path: "/var/lib/nls-nexos-core/router-registry.sqlite3"
 pki:
