@@ -1,0 +1,16 @@
+[Unit]
+Description=NLS Router-CA enrollment agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+ExecStart=/usr/bin/nlsxnetos-ca-enroll --config /etc/nlsxnetos/router-ca.yaml
+TimeoutStartSec=90
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
