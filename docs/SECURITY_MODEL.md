@@ -1,21 +1,13 @@
 # Security Model
 
-## Protected assets
+Protect the CA signing key, router private keys, enrollment credentials, router inventory, certificates and NLS session material.
 
-CA signing key, router private keys, enrollment credentials, registry and authorization policies, certificates/revocation state, and NLS session key material.
+- Pin the CA root and verify its server certificate before transmitting credentials.
+- Never transmit router private keys. Generate and store them locally with restrictive permissions.
+- Use an allow-list, authorized bootstrap credential, signed CSR/key-possession proof, freshness checks and persistent replay records.
+- Treat MAC and IP as inventory attributes, not identity proof by themselves.
+- Validate certificates for issuer, validity, identity and purpose; support short-lived credentials and revocation.
+- Use parameterized SQL, request-size bounds, rate limits, sanitized audit logs and access-controlled registry files.
+- Keep CA signing key outside the router database; use offline/HSM protection for production where possible.
 
-## Threats and required controls
-
-- Unknown router enrollment: allow-list registration and enrollment authorization.
-- Spoofed IP/MAC: treat them as attributes, not proof; validate public-key possession and enrollment credential.
-- Replay: unique request IDs/nonces, freshness window, persistent replay store.
-- Fake CA: pinned root trust, strict TLS certificate/identity checks, never disable verification.
-- CSR key substitution: validate CSR signature and compare public-key fingerprint to registry when pre-registered.
-- Expiry/revocation: short-lived certificates, status checks and authenticated revocation updates.
-- Injection: parameterized SQL and input size/schema validation.
-- Credential disclosure: never log token or private keys; root-only bootstrap secret file.
-- Database tampering: restrictive ownership, audit events, backups and administrative access control.
-
-## Not in initial prototype
-
-TPM attestation, HSM key storage, HA, formal verification, Internet-scale issuance, and production CRL/OCSP. Do not claim production readiness until these and independent review are complete.
+TPM attestation, HSM operation, HA, full CRL/OCSP service, production mTLS authorization and independent security review remain out of scope for the initial prototype.

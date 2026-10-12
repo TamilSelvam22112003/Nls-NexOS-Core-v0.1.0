@@ -1,7 +1,5 @@
-# Copy to /etc/nls-nexos-core/router-ca.yaml and adjust.
-# This file must not contain a CA private key or enrollment secret.
 server:
-  host: "2001:db8::10"
+  host: "::"
   port: 8443
   log_level: "INFO"
 database:
@@ -11,12 +9,6 @@ pki:
   ca_private_key: "/etc/nls-nexos-core/pki/ca-signing.key"
   issued_cert_dir: "/var/lib/nls-nexos-core/issued"
 enrollment:
-  require_pre_registered_router: true
-  require_token: true
   token_file: "/etc/nls-nexos-core/enrollment-token"
   certificate_days: 90
   max_request_bytes: 65536
-mtls:
-  server_certificate: "/etc/nls-nexos-core/tls/server.crt"
-  server_private_key: "/etc/nls-nexos-core/tls/server.key"
-  client_ca_bundle: "/etc/nls-nexos-core/pki/ca-root.crt"
