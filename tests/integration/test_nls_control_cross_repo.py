@@ -16,9 +16,17 @@ from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
 from cryptography.x509.oid import NameOID
 
 ROOT = Path(__file__).resolve().parents[2]
-NLSXNETOS = ROOT / "nlsxnetos"
+# CI checks out the router repository alongside Core at $GITHUB_WORKSPACE/nlsxnetos.
+# When this test is run in the combined checkout, append that sibling path directly.
+NLSXNETOS = ROOT.parent / "nlsxnetos"
 if NLSXNETOS.exists():
     sys.path.insert(0, str(NLSXNETOS))
+else:
+    # Also support a local clone that places Core and NlsxNetOS under one parent.
+    sibling = ROOT.parent / "NlsxNetOS-v0.1.0"
+    if sibling.exists():
+        NLSXNETOS = sibling
+        sys.path.insert(0, str(NLSXNETOS))
 
 from nls.ca_client import ClientSettings, _open_channel, enroll
 from nls_nexos_core.ca import CertificateAuthority
