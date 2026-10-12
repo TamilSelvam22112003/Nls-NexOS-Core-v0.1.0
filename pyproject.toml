@@ -21,3 +21,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/security"]
+markers = ["integration: cross-repository or Linux network integration tests"]
