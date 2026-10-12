@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NLS Router Enrollment Request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "router_id",
+    "csr_pem",
+    "request_id",
+    "nonce",
+    "timestamp"
+  ],
+  "properties": {
+    "protocol_version": {
+      "const": 1
+    },
+    "router_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "csr_pem": {
+      "type": "string",
+      "minLength": 100,
+      "maxLength": 50000
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 32,
+      "maxLength": 128
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "claimed_ipv6": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "claimed_mac": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "public_key_fingerprint": {
+      "type": "string",
+      "maxLength": 128
+    }
+  }
+}
