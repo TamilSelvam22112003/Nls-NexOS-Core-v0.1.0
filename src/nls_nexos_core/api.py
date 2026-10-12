@@ -18,8 +18,8 @@ def create_app(settings=None):
  @app.get('/health',response_model=HealthResponse)
  async def health():return HealthResponse()
  @app.post('/api/v1/enroll',response_model=EnrollmentResponse)
- async def enroll(req:EnrollmentRequest,x_nls_enrollment_token:str=Header(default='')):
-  try:return ca.enroll(req,x_nls_enrollment_token)
+ async def enroll(req:EnrollmentRequest,x_nls_bootstrap_token:str=Header(default=''),x_nls_router_token:str=Header(default='')):
+  try:return ca.enroll(req,x_nls_bootstrap_token,x_nls_router_token)
   except EnrollmentDenied as exc:raise HTTPException(status_code=403,detail='enrollment denied') from exc
   except Exception as exc:logging.exception('enrollment internal error');raise HTTPException(status_code=500,detail='internal error') from exc
  @app.get('/api/v1/policy')

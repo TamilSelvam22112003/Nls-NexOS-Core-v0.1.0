@@ -28,10 +28,15 @@ class CertificateAuthority:
         if self.ca_cert.public_key().public_numbers() != self.ca_key.public_key().public_numbers():
             raise RuntimeError("CA key does not match CA certificate")
 
-    def enroll(self, req: EnrollmentRequest, presented_token: str) -> EnrollmentResponse:
+    def enroll(
+        self,
+        req: EnrollmentRequest,
+        presented_bootstrap_token: str,
+        presented_router_token: str,
+    ) -> EnrollmentResponse:
         epoch = int(time.time())
         now = datetime.now(timezone.utc)
-        if not secrets.compare_digest(self.token, presented_token):
+        if not secrets.compare_digest(self.token, presented_bootstrap_token):
             self.registry.audit("ENROLL_DENIED", req.router_id, "invalid bootstrap credential", epoch)
             raise EnrollmentDenied("enrollment denied")
         if abs(epoch - req.timestamp) > 300 or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", req.nonce):
@@ -53,7 +58,7 @@ class CertificateAuthority:
         # allow-listed token hash. A valid global bootstrap token alone is not
         # sufficient authorization to enroll every registered router.
         registered_token_hash = router.get("enrollment_token_sha256")
-        presented_token_hash = hashlib.sha256(presented_token.encode("utf-8")).hexdigest()
+        presented_token_hash = hashlib.sha256(presented_router_token.encode("utf-8")).hexdigest()
         if not registered_token_hash or not secrets.compare_digest(
             registered_token_hash.lower(), presented_token_hash
         ):
