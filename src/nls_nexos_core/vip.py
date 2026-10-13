@@ -45,4 +45,4 @@ def derive_temporary_vip(secret: bytes, router_id: str, peer_id: str, nonce: byt
         raise ValueError("NLS vIP prefix must be a ULA IPv6 /48")
     context = b"NLS-TEMP-VIP-v1\x00" + router_id.encode() + b"\x00" + peer_id.encode() + b"\x00" + nonce
     digest = hmac.new(secret, context, hashlib.sha256).digest()
-    return str(ipaddress.IPv6Address(int(network.network_address) | (int.from_bytes(digest[:10], "big") << 48)))
+    return str(ipaddress.IPv6Address(int(network.network_address) | int.from_bytes(digest[:10], "big")))
