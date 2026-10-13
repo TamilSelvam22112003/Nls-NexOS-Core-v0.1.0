@@ -26,3 +26,14 @@ def test_rejects_non_ula_or_non_64_prefix():
         generate_temporary_vip(b"x" * 20, "2001:db8::/64")
     with pytest.raises(ValueError):
         generate_temporary_vip(b"x" * 20, "fd42:4e4c:5300::/48")
+
+
+def test_handshake_vip_derivation_is_keyed_and_peer_scoped():
+    from nls_nexos_core.vip import derive_temporary_vip
+
+    secret = b"s" * 32
+    nonce = b"n" * 32
+    first = derive_temporary_vip(secret, "router-a", "router-b", nonce)
+    assert first == derive_temporary_vip(secret, "router-a", "router-b", nonce)
+    assert first != derive_temporary_vip(secret, "router-a", "router-c", nonce)
+    assert ipaddress.IPv6Address(first) in ipaddress.IPv6Network("fd42:4e4c:5300::/48")
