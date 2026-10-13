@@ -20,7 +20,7 @@ def generate_temporary_vip(router_identity: bytes, overlay_prefix: str,
     if not isinstance(router_identity, bytes) or len(router_identity) < 16:
         raise ValueError("router_identity must contain at least 16 bytes")
     network = ipaddress.IPv6Network(overlay_prefix, strict=True)
-    if network.prefixlen != 64 or not network.network_address.is_private:
+    if network.prefixlen != 64 or (int(network.network_address) >> 121) != 0b1111110:
         raise ValueError("overlay_prefix must be a ULA IPv6 /64 (fd00::/8)")
     nonce = secrets.token_bytes(32) if nonce is None else nonce
     if not isinstance(nonce, bytes) or len(nonce) < 16:
@@ -41,7 +41,7 @@ def derive_temporary_vip(secret: bytes, router_id: str, peer_id: str, nonce: byt
     if not isinstance(nonce, bytes) or len(nonce) < 16:
         raise ValueError("vIP nonce must contain at least 16 bytes")
     network = ipaddress.IPv6Network(prefix, strict=True)
-    if network.prefixlen != 48 or not network.network_address.is_private:
+    if network.prefixlen != 48 or (int(network.network_address) >> 121) != 0b1111110:
         raise ValueError("NLS vIP prefix must be a ULA IPv6 /48")
     context = b"NLS-TEMP-VIP-v1\x00" + router_id.encode() + b"\x00" + peer_id.encode() + b"\x00" + nonce
     digest = hmac.new(secret, context, hashlib.sha256).digest()
