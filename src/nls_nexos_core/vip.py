@@ -7,7 +7,10 @@ collisions, ownership and expiry. A hash-derived vIP is not proof of identity.
 """
 from __future__ import annotations
 
+DEFAULT_VIP_PREFIX = "fd42:4e4c:5300::/48"
+
 import hashlib
+import hmac
 import ipaddress
 import secrets
 
@@ -29,3 +32,17 @@ def generate_temporary_vip(router_identity: bytes, overlay_prefix: str,
         iid = int.from_bytes(digest[:8], "big")
     address = ipaddress.IPv6Address(int(network.network_address) | iid)
     return str(address), nonce
+
+
+def derive_temporary_vip(secret: bytes, router_id: str, peer_id: str, nonce: bytes, prefix: str = DEFAULT_VIP_PREFIX) -> str:
+    """Derive the same session-scoped overlay vIP contract as NlsxNetOS."""
+    if not isinstance(secret, bytes) or len(secret) < 32:
+        raise ValueError("vIP derivation secret must contain at least 32 bytes")
+    if not isinstance(nonce, bytes) or len(nonce) < 16:
+        raise ValueError("vIP nonce must contain at least 16 bytes")
+    network = ipaddress.IPv6Network(prefix, strict=True)
+    if network.prefixlen != 48 or not network.network_address.is_private:
+        raise ValueError("NLS vIP prefix must be a ULA IPv6 /48")
+    context = b"NLS-TEMP-VIP-v1\x00" + router_id.encode() + b"\x00" + peer_id.encode() + b"\x00" + nonce
+    digest = hmac.new(secret, context, hashlib.sha256).digest()
+    return str(ipaddress.IPv6Address(int(network.network_address) | (int.from_bytes(digest[:10], "big") << 48)))
