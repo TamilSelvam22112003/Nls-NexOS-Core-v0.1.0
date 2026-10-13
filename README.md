@@ -23,7 +23,7 @@ Companion router repository: [NlsxNetOS-v0.1.0](https://github.com/TamilSelvam22
 3. **Mutual NLS control:** reconnect with the signed router identity certificate. Router-CA validates its chain, validity, public-key binding, registry record and revocation status. The router authenticates the Router-CA using its pinned Ed25519 control identity key.
 4. **Policy and revocation synchronization:** keep the TCP channel open and exchange heartbeats. Router-CA returns versioned NLS cryptographic policy and revoked certificate serials; session keys are derived locally by X25519/HKDF and are never sent as raw symmetric keys.
 
-NLS data-plane packets remain on the existing NLS UDP transport (default port 4789); the NLS control channel uses TCP port 4790. Outer IP destination addresses required by ordinary routing remain visible; sensitive original endpoints and user payload belong inside the encrypted NLS inner packet.
+NLS data-plane packets remain on the existing NLS UDP transport (default port 4789); the NLS control channel uses TCP port 4790. The original destination address is visible in the NLS routing header so a participating NLS router can select a destination prefix; the original source address and complete inner packet remain encrypted. The outer UDP/IP source address of each underlay hop is still visible. The current NlsxNetOS daemon does not yet implement the complete authenticated multi-hop relay/session path, so the packet format alone does not establish end-to-end multi-router forwarding.
 
 ## Important security status
 
