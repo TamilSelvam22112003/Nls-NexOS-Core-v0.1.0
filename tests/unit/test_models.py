@@ -14,3 +14,8 @@ def test_bad_router_id_rejected():
     with pytest.raises(ValidationError): EnrollmentRequest(**sample(router_id='../bad'))
 def test_short_request_id_rejected():
     with pytest.raises(ValidationError): EnrollmentRequest(**sample(request_id='short'))
+
+
+def test_router_cannot_supply_operator_directory_metadata():
+    with pytest.raises(ValidationError):
+        EnrollmentRequest(**sample(wan_endpoints=["198.51.100.1:4789"]))
