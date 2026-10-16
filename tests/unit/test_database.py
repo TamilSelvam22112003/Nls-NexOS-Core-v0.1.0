@@ -34,3 +34,20 @@ def test_legacy_schema_migration_is_idempotent(tmp_path):
         assert migrated.execute("SELECT version FROM schema_version").fetchone()[0] == 2
         columns = {row["name"] for row in migrated.execute("PRAGMA table_info(routers)")}
         assert {"ed25519_public_key", "rsa_encryption_public_key", "gateway_ips", "prefixes"} <= columns
+
+
+
+def test_revoke_router_revokes_active_certificates_and_advances_directory(tmp_path):
+    db = Registry(tmp_path / "registry.db")
+    now = 100
+    with db.connect() as con:
+        con.execute("INSERT INTO routers(router_id,registered,status,created_at,updated_at) VALUES(?,1,'ACTIVE',?,?)",
+                    ("router-a", now, now))
+    db.record_certificate("abc123", "router-a", "2026-01-01T00:00:00+00:00",
+                          "2027-01-01T00:00:00+00:00", "d" * 64, now)
+    before = db.directory_seq()
+    assert db.revoke_router("router-a", now + 1)
+    assert db.get_router("router-a")["status"] == "REVOKED"
+    assert db.get_certificate("abc123")["status"] == "REVOKED"
+    assert db.directory_seq() > before
+    assert not db.revoke_router("router-a", now + 2)
