@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NLS Router Directory Control Messages v1",
+  "oneOf": [
+    {
+      "title": "lookup request",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "router_id", "target_router_id", "client_nonce"],
+      "properties": {
+        "type": { "const": "lookup" },
+        "router_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "target_router_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "client_nonce": { "type": "string", "minLength": 16, "maxLength": 128 }
+      }
+    },
+    {
+      "title": "directory-sync request",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "router_id", "since_seq"],
+      "properties": {
+        "type": { "const": "directory-sync" },
+        "router_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "since_seq": { "type": "integer", "minimum": 0 }
+      }
+    },
+    {
+      "title": "signed directory envelope",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["payload", "signer_public_key", "signature", "encoding", "domain"],
+      "properties": {
+        "payload": { "type": "object" },
+        "signer_public_key": { "type": "string", "contentEncoding": "base64" },
+        "signature": { "type": "string", "contentEncoding": "base64" },
+        "encoding": { "const": "canonical-cbor" },
+        "domain": { "const": "NLS-DIR-v1" }
+      }
+    }
+  ]
+}
