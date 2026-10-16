@@ -8,6 +8,8 @@ class EnrollmentRequest(BaseModel):
     request_id: str = Field(min_length=16, max_length=128)
     nonce: str = Field(min_length=32, max_length=128)
     timestamp: int = Field(ge=0)
+    rsa_encryption_public_key: str = Field(min_length=100, max_length=20000)
+    rsa_proof_of_possession: str = Field(min_length=80, max_length=4096)
     claimed_ipv6: str | None = Field(default=None, max_length=64)
     claimed_mac: str | None = Field(default=None, max_length=32)
 
