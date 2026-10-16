@@ -79,7 +79,7 @@ def record_for_router(registry, router_id: str, now: int | None = None, validity
         "status": status,
         "record_seq": int(router.get("record_seq") or 1),
         "issued_at": now,
-        "valid_until": min(now + min(max(int(validity_seconds), 1), 600), not_after),
+        "valid_until": now + min(max(int(validity_seconds), 1), 600),
     }
 
 
