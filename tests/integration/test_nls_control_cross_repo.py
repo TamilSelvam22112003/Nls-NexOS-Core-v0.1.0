@@ -29,7 +29,7 @@ else:
         NLSXNETOS = sibling
         sys.path.insert(0, str(NLSXNETOS))
 
-from nls.ca_client import ClientSettings, _open_channel, directory_sync, enroll, lookup
+from nls.ca_client import ClientSettings, _open_channel, _persist_bundle, directory_sync, enroll, is_revoked, lookup
 from nls_nexos_core.ca import CertificateAuthority
 from nls_nexos_core.config import Settings
 from nls_nexos_core.control import NLSControlServer
@@ -147,6 +147,15 @@ def test_router_enrolls_and_syncs_over_nls_control_v1(tmp_path):
             bundle = directory_sync(client_cfg, identity)
             assert bundle["directory_seq"] >= 1
             assert any(item["payload"]["router_id"] == "edge-test" for item in bundle["records"])
+
+            serial = enrolled["serial_number"]
+            assert registry.revoke_router("edge-test", int(time.time()) + 1)
+            channel.send({"type": "heartbeat", "router_id": "edge-test"})
+            revoked_heartbeat = channel.recv()
+            assert revoked_heartbeat["type"] == "heartbeat-result"
+            assert serial in revoked_heartbeat["revocation_state"]["revoked_certificates"][0]["serial_number"]
+            _persist_bundle(client_cfg, revoked_heartbeat)
+            assert is_revoked(serial, client_cfg)
         finally:
             channel.close()
     finally:
