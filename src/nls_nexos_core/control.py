@@ -56,10 +56,16 @@ class NLSControlServer:
         try:
             cert = x509.load_pem_x509_certificate(hello["certificate_pem"].encode("ascii"))
             ca_cert = self.authority.ca_cert
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            now = datetime.now(timezone.utc)
+            not_before = getattr(cert, "not_valid_before_utc", None)
+            not_after = getattr(cert, "not_valid_after_utc", None)
+            if not_before is None:
+                not_before = cert.not_valid_before.replace(tzinfo=timezone.utc)
+            if not_after is None:
+                not_after = cert.not_valid_after.replace(tzinfo=timezone.utc)
             if cert.issuer != ca_cert.subject:
                 raise NLSControlError("router certificate issuer mismatch")
-            if not (cert.not_valid_before <= now <= cert.not_valid_after):
+            if not (not_before <= now <= not_after):
                 raise NLSControlError("router certificate is expired or not yet valid")
             if self._cert_public_raw(cert) != __import__("base64").b64decode(
                 hello["identity_public_key"], validate=True
