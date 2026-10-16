@@ -28,9 +28,9 @@ CREATE TABLE IF NOT EXISTS audit_log(
  id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL,
  event TEXT NOT NULL, router_id TEXT, detail TEXT NOT NULL DEFAULT ''
 );
-CREATE TABLE IF NOT EXISTS schema_version(version INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS schema_version(singleton INTEGER PRIMARY KEY CHECK(singleton=1), version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS directory_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1), directory_seq INTEGER NOT NULL);
-INSERT OR IGNORE INTO schema_version(version) VALUES(1);
+INSERT OR IGNORE INTO schema_version(singleton,version) VALUES(1,1);
 INSERT OR IGNORE INTO directory_meta(singleton,directory_seq) VALUES(1,0);
 """
 
@@ -70,7 +70,7 @@ class Registry:
     con.execute("ALTER TABLE issued_certificates ADD COLUMN revoked_at INTEGER")
    # Version 2 is the directory/enrollment schema. This is safe to rerun after
    # interruption because each ALTER is guarded by an introspection check.
-   con.execute("UPDATE schema_version SET version=2")
+   con.execute("UPDATE schema_version SET version=2 WHERE singleton=1")
   try: self.path.chmod(0o640)
   except OSError: pass
 
