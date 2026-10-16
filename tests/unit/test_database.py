@@ -51,3 +51,19 @@ def test_revoke_router_revokes_active_certificates_and_advances_directory(tmp_pa
     assert db.get_certificate("abc123")["status"] == "REVOKED"
     assert db.directory_seq() > before
     assert not db.revoke_router("router-a", now + 2)
+
+
+def test_certificate_expiry_advances_record_and_directory_sequences(tmp_path):
+    db = Registry(tmp_path / "registry.db")
+    now = int(time.time())
+    with db.connect() as con:
+        con.execute("INSERT INTO routers(router_id,registered,status,created_at,updated_at) VALUES(?,1,'ACTIVE',?,?)",
+                    ("router-expiry", now, now))
+    db.record_certificate("expired1", "router-expiry", "2020-01-01T00:00:00+00:00",
+                          "2020-01-02T00:00:00+00:00", "e" * 64, now)
+    before_seq = db.directory_seq()
+    before_record = db.get_router("router-expiry")["record_seq"]
+    assert db.expire_certificates(now + 10) == 1
+    assert db.get_certificate("expired1")["status"] == "EXPIRED"
+    assert db.get_router("router-expiry")["record_seq"] > before_record
+    assert db.directory_seq() > before_seq
