@@ -144,6 +144,27 @@ class Registry:
    return [dict(r) for r in con.execute(
     "SELECT serial_number,router_id,revoked_at FROM issued_certificates WHERE status='REVOKED' ORDER BY revoked_at,serial_number")]
 
+ def expire_certificates(self, now):
+  from datetime import datetime, timezone
+  now_dt=datetime.fromtimestamp(int(now),timezone.utc)
+  expired=[]
+  with self.connect() as con:
+   rows=con.execute("SELECT serial_number,router_id,not_after FROM issued_certificates WHERE status='ACTIVE'").fetchall()
+   for row in rows:
+    try:
+     expiry=datetime.fromisoformat(row["not_after"].replace("Z","+00:00"))
+     if expiry.tzinfo is None: expiry=expiry.replace(tzinfo=timezone.utc)
+    except (ValueError,TypeError):
+     expiry=now_dt
+    if expiry <= now_dt:
+     cur=con.execute("UPDATE issued_certificates SET status='EXPIRED' WHERE serial_number=? AND status='ACTIVE'",(row["serial_number"],))
+     if cur.rowcount:
+      expired.append(row["router_id"])
+   for router_id in expired:
+    con.execute("UPDATE routers SET record_seq=record_seq+1,updated_at=? WHERE router_id=?",(int(now),router_id))
+    con.execute("UPDATE directory_meta SET directory_seq=directory_seq+1 WHERE singleton=1")
+  return len(expired)
+
  def revoke_certificate(self, serial, now):
   with self.connect() as con:
    row=con.execute("SELECT router_id FROM issued_certificates WHERE lower(serial_number)=?",
