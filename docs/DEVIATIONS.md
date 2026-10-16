@@ -1,7 +1,6 @@
-# Deviations — Prompt 1
+# Deviations — Prompt 2
 
-- No product-code changes are authorized; only documentation and test scaffolding change.
-- API docs distinguish normative target from operations present in current source.
-- No benchmark result is claimed for V9; controlled RSA-3072 performance testing remains open.
-- X.509 root and Ed25519 directory signer are distinct trust anchors because the spec assigns them separate roles.
-- No deviation from suite, stages, or route-ownership rule is authorized.
+- The `directory-sync` response currently returns a full signed directory snapshot for every `since_seq`, rather than incremental deltas. This is wire-compatible with the required signed bundle semantics and reduces state ambiguity; delta optimization is deferred.
+- Lookup and directory records use the same `NLS-DIR-v1` canonical-CBOR envelope, with the lookup nonce included in the signed RDR payload as well as echoed by the response.
+- The custom NLS Control v1 transport remains experimental and is not TLS. Independent cryptographic review is still required.
+- Router data-plane session teardown is not changed in Prompt 2; the exposed revocation/freshness accessors are intended for prompts 3–4.
