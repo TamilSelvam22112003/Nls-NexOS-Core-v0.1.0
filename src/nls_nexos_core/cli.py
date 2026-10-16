@@ -1,6 +1,7 @@
 import argparse
 import base64
 import hashlib
+import json
 import os
 import secrets
 import time
@@ -15,6 +16,7 @@ from .config import Settings, token_from_environment_or_file
 from .control import NLSControlServer
 from .ca import CertificateAuthority
 from .database import Registry
+from .directory import signed_directory_bundle
 
 
 def _load_or_create_control_identity(path):
@@ -80,7 +82,8 @@ def bootstrap(config_path: str):
 
 
 def register(config_path: str, router_id: str, token: str,
-             public_key_sha256: str = "", ipv6: str = "", mac: str = ""):
+             public_key_sha256: str = "", ipv6: str = "", mac: str = "",
+             rsa_public_key_sha256: str = "", wan_endpoints=None, gateway_ips=None, prefixes=None):
     if len(token) < 32:
         raise SystemExit("Router enrollment token must be at least 32 characters")
     settings = Settings.load(config_path)
@@ -98,6 +101,10 @@ def register(config_path: str, router_id: str, token: str,
             (router_id, public_key_sha256 or None, ipv6 or None, mac or None,
              hashlib.sha256(token.encode()).hexdigest(), now, now),
         )
+    registry.set_directory_fields(
+        router_id, wan_endpoints=list(wan_endpoints or []), gateway_ips=list(gateway_ips or []),
+        prefixes=list(prefixes or []), expected_rsa_public_key_sha256=rsa_public_key_sha256 or None,
+    )
     registry.audit("ROUTER_REGISTERED", router_id, "registered by local administrator", now)
     print(f"Registered router: {router_id}")
 
@@ -113,6 +120,30 @@ def revoke_certificate(config_path: str, serial: str):
         raise SystemExit("Certificate is not active")
     registry.audit("CERT_REVOKED", row["router_id"], f"serial={row['serial_number']}", now)
     print(f"Revoked certificate {row['serial_number']} for router {row['router_id']}")
+
+
+def revoke_router(config_path: str, router_id: str):
+    settings = Settings.load(config_path)
+    registry = Registry(settings.database_path)
+    now = int(time.time())
+    if not registry.revoke_router(router_id, now):
+        raise SystemExit("Router not found or already revoked")
+    registry.audit("ROUTER_REVOKED", router_id, "router and active certificates revoked by administrator", now)
+    print(f"Revoked router and active certificates: {router_id}")
+
+
+def export_directory(config_path: str, output_path: str):
+    settings = Settings.load(config_path)
+    registry = Registry(settings.database_path)
+    identity = _load_or_create_control_identity(settings.control_identity_key)
+    bundle = signed_directory_bundle(registry, settings, identity)
+    target = __import__("pathlib").Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(bundle, sort_keys=True, separators=(",", ":")) + "\\n", encoding="utf-8")
+    os.chmod(tmp, 0o640)
+    os.replace(tmp, target)
+    print(f"Exported signed directory bundle: {target}")
 
 
 def serve(config_path: str):
@@ -139,6 +170,14 @@ def main():
     register_parser.add_argument("--public-key-sha256", default="")
     register_parser.add_argument("--ipv6", default="")
     register_parser.add_argument("--mac", default="")
+    register_parser.add_argument("--rsa-public-key-sha256", default="")
+    register_parser.add_argument("--wan-endpoint", action="append", default=[])
+    register_parser.add_argument("--gateway-ip", action="append", default=[])
+    register_parser.add_argument("--prefix", action="append", default=[])
+    revoke_router_parser = subs.add_parser("revoke-router")
+    revoke_router_parser.add_argument("router_id")
+    export_parser = subs.add_parser("export-directory")
+    export_parser.add_argument("--output", default="router-directory.bundle.json")
     revoke = subs.add_parser("revoke-certificate")
     revoke.add_argument("serial_number")
     args = parser.parse_args()
@@ -148,9 +187,14 @@ def main():
         serve(args.config)
     elif args.cmd == "revoke-certificate":
         revoke_certificate(args.config, args.serial_number)
+    elif args.cmd == "revoke-router":
+        revoke_router(args.config, args.router_id)
+    elif args.cmd == "export-directory":
+        export_directory(args.config, args.output)
     else:
         token = args.token if args.token is not None else open(args.token_file, encoding="utf-8").read().strip()
-        register(args.config, args.router_id, token, args.public_key_sha256, args.ipv6, args.mac)
+        register(args.config, args.router_id, token, args.public_key_sha256, args.ipv6, args.mac,
+                 args.rsa_public_key_sha256, args.wan_endpoint, args.gateway_ip, args.prefix)
 
 
 if __name__ == "__main__":
