@@ -3,7 +3,7 @@ from pydantic import ValidationError
 from nls_nexos_core.models import EnrollmentRequest
 
 def sample(**change):
-    value=dict(protocol_version=1,router_id='edge-1',csr_pem='x'*150,request_id='r'*24,nonce='n'*32,timestamp=1000)
+    value=dict(protocol_version=1,router_id='edge-1',csr_pem='x'*150,request_id='r'*24,nonce='n'*32,timestamp=1000,rsa_encryption_public_key='p'*150,rsa_proof_of_possession='s'*100)
     value.update(change)
     return value
 
