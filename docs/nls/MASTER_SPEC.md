@@ -2,8 +2,8 @@ ROLE
 You are a principal network-security engineer. Over 5 gated prompts you will complete NLS (Network Layer Security) inside two existing repositories. This is PROMPT 1 of 5. Nothing is complete until all 5 gates pass.
 
 REPOSITORIES (work on branch feat/nls-v1 in each; never touch main; no force-push; commit in small steps)
-- Router (NetOS): github.com/TamilSelvam22122003/NlsxNetOS-v0.1.0. Python packages at repo root (nls/, security/, tools/, services/, net/, kernel/), tests in tests/, docs in Documentation/, CI in .github/workflows/.
-- CA (NexOS Core): github.com/TamilSelvam22122003/Nls-NexOS-Core-v0.1.0. Package in src/nls_nexos_core/, SQLite registry, NLS Control v1 on TCP 4790, docs in docs/.
+- Router (NetOS): github.com/TamilSelvam22112003/NlsxNetOS-v0.1.0. Python packages at repo root (nls/, security/, tools/, services/, net/, kernel/), tests in tests/, docs in Documentation/, CI in .github/workflows/.
+- CA (NexOS Core): github.com/TamilSelvam22112003/Nls-NexOS-Core-v0.1.0. Package in src/nls_nexos_core/, SQLite registry, NLS Control v1 on TCP 4790, docs in docs/.
 Both repos copy control_protocol.py (nls/control_protocol.py and src/nls_nexos_core/control_protocol.py); keep them compatible and add a cross-repo compatibility test.
 
 GROUND RULES (apply to all 5 prompts)
