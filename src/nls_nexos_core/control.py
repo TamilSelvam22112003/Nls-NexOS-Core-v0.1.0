@@ -104,6 +104,23 @@ class NLSControlServer:
                 self.registry.audit("DIRECTORY_LOOKUP_DENIED", None, "missing active client certificate", int(time.time()))
                 return {"type": "error", "code": "not-authorized", "message": "directory access denied"}
             router_id = auth["router_id"]
+            router = self.registry.get_router(router_id)
+            cert = self.registry.get_certificate(auth.get("serial_number", ""))
+            if (not router or not router.get("registered") or router.get("status") != "ACTIVE"
+                    or not cert or cert.get("status") != "ACTIVE" or cert.get("router_id") != router_id):
+                self.registry.audit("DIRECTORY_LOOKUP_DENIED", router_id, "certificate or router no longer active", int(time.time()))
+                return {"type": "error", "code": "not-authorized", "message": "directory access denied"}
+            try:
+                from datetime import datetime, timezone
+                expiry = datetime.fromisoformat(cert["not_after"].replace("Z", "+00:00"))
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                if expiry.timestamp() <= time.time():
+                    self.registry.audit("DIRECTORY_LOOKUP_DENIED", router_id, "client certificate expired", int(time.time()))
+                    return {"type": "error", "code": "not-authorized", "message": "directory access denied"}
+            except (KeyError, ValueError, TypeError):
+                self.registry.audit("DIRECTORY_LOOKUP_DENIED", router_id, "invalid certificate expiry metadata", int(time.time()))
+                return {"type": "error", "code": "not-authorized", "message": "directory access denied"}
             now = time.monotonic()
             with self._lookup_lock:
                 recent = [t for t in self._lookup_times.get(router_id, []) if now - t < 60]
