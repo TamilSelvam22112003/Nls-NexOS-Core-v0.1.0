@@ -86,14 +86,14 @@ def handle_control_request(message: dict, authority, registry, settings,
             if not isinstance(target, str) or not 1 <= len(target) <= 128 or not isinstance(nonce, str) or not 16 <= len(nonce) <= 128:
                 registry.audit("DIRECTORY_LOOKUP_DENIED", router_id, "invalid lookup parameters", int(time.time()))
                 return {"type": "error", "code": "bad-request", "message": "invalid lookup request"}
-            record = signed_rdr(registry, target, control_identity_key) if control_identity_key else None
+            record = signed_rdr(registry, target, control_identity_key, client_nonce=nonce) if control_identity_key else None
             registry.audit("DIRECTORY_LOOKUP", router_id, "target=" + target, int(time.time()))
             if record is None:
                 from .directory import sign_payload
                 record = sign_payload({
                     "router_id": target, "ed25519_public_key": None, "rsa_encryption_public_key": None,
                     "wan_endpoints": [], "gateway_ips": [], "prefixes": [], "certificate_serial": None,
-                    "status": "UNKNOWN", "record_seq": 0, "issued_at": int(time.time()),
+                    "status": "UNKNOWN", "record_seq": 0, "issued_at": int(time.time()), "client_nonce": nonce,
                     "valid_until": int(time.time()) + 30,
                 }, control_identity_key)
             return {"type": "lookup-result", "ok": True, "client_nonce": nonce, "record": record}
