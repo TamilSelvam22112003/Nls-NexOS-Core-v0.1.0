@@ -12,7 +12,11 @@ Companion router repository: [NlsxNetOS-v0.1.0](https://github.com/TamilSelvam22
 - Pre-provisioned Router-CA control identity pinning before enrollment
 - Router CSR validation, bootstrap-token plus router-specific enrollment-token authorization, and CA-signed router identity certificates
 - Certificate verification against the pinned Router-CA root on subsequent NLS control connections
-- SQLite router/certificate registry, persistent enrollment replay tracking, audit events, certificate revocation state
+- SQLite router/certificate registry with an idempotent schema-version migration, per-router record sequence, and monotonic directory sequence
+- RSA-3072 encryption-key enrollment binding with request-bound RSA-PSS proof-of-possession and optional administrator-pinned RSA fingerprint
+- Canonical-CBOR, domain-separated signed Router Directory Records and signed offline directory bundles
+- Authenticated, nonce-bound `lookup`, signed `directory-sync`, heartbeat directory sequence/revocation state, and per-router request rate limits
+- Operator-owned WAN endpoints, gateway IPs and prefixes; `revoke-router` revokes the router and its active certificates; `export-directory` emits a signed bundle
 - Encrypted sync and heartbeat messages carrying versioned NLS policy and revocation state
 - Core unit tests and a cross-repository IPv6 loopback integration test against the NlsxNetOS client
 
