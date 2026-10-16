@@ -26,6 +26,63 @@
       }
     },
     {
+      "title": "lookup result",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "ok", "client_nonce", "record"],
+      "properties": {
+        "type": { "const": "lookup-result" },
+        "ok": { "const": true },
+        "client_nonce": { "type": "string", "minLength": 16, "maxLength": 128 },
+        "record": { "$ref": "#/$defs/signedEnvelope" }
+      }
+    },
+    {
+      "title": "directory-sync result",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "ok", "since_seq", "directory_bundle", "directory_seq", "revoked_serials"],
+      "properties": {
+        "type": { "const": "directory-sync-result" },
+        "ok": { "const": true },
+        "since_seq": { "type": "integer", "minimum": 0 },
+        "directory_bundle": { "$ref": "#/$defs/signedEnvelope" },
+        "directory_seq": { "type": "integer", "minimum": 0 },
+        "revoked_serials": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    {
+      "title": "heartbeat result",
+      "type": "object",
+      "required": ["type", "ok", "directory_seq", "revocation_state", "directory_bundle"],
+      "properties": {
+        "type": { "const": "heartbeat-result" },
+        "ok": { "const": true },
+        "directory_seq": { "type": "integer", "minimum": 0 },
+        "revocation_state": { "type": "object" },
+        "directory_bundle": { "$ref": "#/$defs/signedEnvelope" }
+      }
+    },
+    {
+      "title": "signed RDR payload",
+      "type": "object",
+      "required": ["router_id", "ed25519_public_key", "rsa_encryption_public_key", "wan_endpoints", "gateway_ips", "prefixes", "certificate_serial", "status", "record_seq", "issued_at", "valid_until"],
+      "properties": {
+        "router_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ed25519_public_key": { "type": ["string", "null"] },
+        "rsa_encryption_public_key": { "type": ["string", "null"] },
+        "wan_endpoints": { "type": "array", "items": { "type": "string" } },
+        "gateway_ips": { "type": "array", "items": { "type": "string" } },
+        "prefixes": { "type": "array", "items": { "type": "string" } },
+        "certificate_serial": { "type": ["string", "null"] },
+        "status": { "enum": ["ACTIVE", "REVOKED", "DISABLED", "EXPIRED", "UNKNOWN"] },
+        "record_seq": { "type": "integer", "minimum": 0 },
+        "issued_at": { "type": "integer", "minimum": 0 },
+        "valid_until": { "type": "integer", "minimum": 0 },
+        "client_nonce": { "type": "string" }
+      }
+    },
+    {
       "title": "signed directory envelope",
       "type": "object",
       "additionalProperties": false,
@@ -38,5 +95,19 @@
         "domain": { "const": "NLS-DIR-v1" }
       }
     }
-  ]
+  ],
+  "$defs": {
+    "signedEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["payload", "signer_public_key", "signature", "encoding", "domain"],
+      "properties": {
+        "payload": { "type": "object" },
+        "signer_public_key": { "type": "string", "contentEncoding": "base64" },
+        "signature": { "type": "string", "contentEncoding": "base64" },
+        "encoding": { "const": "canonical-cbor" },
+        "domain": { "const": "NLS-DIR-v1" }
+      }
+    }
+  }
 }
