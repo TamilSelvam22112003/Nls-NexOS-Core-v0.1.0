@@ -95,7 +95,7 @@ def signed_directory_bundle(registry, settings, private_key: Ed25519PrivateKey,
     for router in registry.list_routers():
         record = record_for_router(registry, router["router_id"], now)
         if record is not None:
-            records.append(record)
+            records.append(sign_payload(record, private_key))
     with registry.connect() as con:
         revoked = [dict(row) for row in con.execute(
             "SELECT serial_number,router_id,revoked_at FROM issued_certificates "
