@@ -1,6 +1,7 @@
 import argparse
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import secrets
@@ -86,6 +87,28 @@ def register(config_path: str, router_id: str, token: str,
              rsa_public_key_sha256: str = "", wan_endpoints=None, gateway_ips=None, prefixes=None):
     if len(token) < 32:
         raise SystemExit("Router enrollment token must be at least 32 characters")
+    for endpoint in wan_endpoints or []:
+        if endpoint.startswith("["):
+            if "]:" not in endpoint:
+                raise SystemExit("WAN IPv6 endpoint must use [address]:port")
+            host, port_text = endpoint[1:].rsplit("]:", 1)
+        else:
+            if endpoint.count(":") != 1:
+                raise SystemExit("WAN IPv4 endpoint must use address:port; bracket IPv6")
+            host, port_text = endpoint.rsplit(":", 1)
+        try:
+            ipaddress.ip_address(host)
+            if not 1 <= int(port_text) <= 65535:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise SystemExit(f"Invalid WAN endpoint: {endpoint}")
+    try:
+        for gateway in gateway_ips or []:
+            ipaddress.ip_address(gateway)
+        for prefix in prefixes or []:
+            ipaddress.ip_network(prefix, strict=False)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid gateway IP or prefix: {exc}")
     settings = Settings.load(config_path)
     registry = Registry(settings.database_path)
     now = int(time.time())
@@ -102,8 +125,10 @@ def register(config_path: str, router_id: str, token: str,
              hashlib.sha256(token.encode()).hexdigest(), now, now),
         )
     registry.set_directory_fields(
-        router_id, wan_endpoints=list(wan_endpoints or []), gateway_ips=list(gateway_ips or []),
-        prefixes=list(prefixes or []), expected_rsa_public_key_sha256=rsa_public_key_sha256 or None,
+        router_id, wan_endpoints=list(wan_endpoints) if wan_endpoints else None,
+        gateway_ips=list(gateway_ips) if gateway_ips else None,
+        prefixes=list(prefixes) if prefixes else None,
+        expected_rsa_public_key_sha256=rsa_public_key_sha256 or None,
     )
     registry.audit("ROUTER_REGISTERED", router_id, "registered by local administrator", now)
     print(f"Registered router: {router_id}")
@@ -171,9 +196,9 @@ def main():
     register_parser.add_argument("--ipv6", default="")
     register_parser.add_argument("--mac", default="")
     register_parser.add_argument("--rsa-public-key-sha256", default="")
-    register_parser.add_argument("--wan-endpoint", action="append", default=[])
-    register_parser.add_argument("--gateway-ip", action="append", default=[])
-    register_parser.add_argument("--prefix", action="append", default=[])
+    register_parser.add_argument("--wan-endpoint", action="append", default=None)
+    register_parser.add_argument("--gateway-ip", action="append", default=None)
+    register_parser.add_argument("--prefix", action="append", default=None)
     revoke_router_parser = subs.add_parser("revoke-router")
     revoke_router_parser.add_argument("router_id")
     export_parser = subs.add_parser("export-directory")
