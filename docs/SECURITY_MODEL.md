@@ -18,5 +18,5 @@ Current control channel is custom, not TLS. It uses signed handshakes, pinned id
 ## Routing isolation and audit
 CA metadata may authorize a peer/prefix but never create routes. Only operator-configured nls route PREFIX via ROUTER-ID entries install TUN routes. Destination validates decrypted inner source against source RDR prefixes by default. Use stable reason codes; never log credentials, keys, decrypted packets, tokens or canaries. Use parameterized SQL and transactions. Bound frames, pending requests, connections and expensive crypto. Rate-limit by observed source, never claimed identity.
 
-## Current gaps
-Current API supports existing enrollment/sync/heartbeat/status only. Signed RDR lookup, directory-sync, RSA enrollment PoP and revoke-router are not implemented in Prompt 1. See docs/TRACEABILITY.md and docs/DEVIATIONS.md.
+## Prompt 2 implementation status and remaining gaps
+The current branch implements RSA-3072 enrollment proof-of-possession, optional administrator-pinned RSA fingerprint, signed canonical-CBOR RDRs and directory bundles, nonce-bound lookup, directory-sync, heartbeat sequence/revocation state, per-router rate limiting, router revocation, and offline bundle export/import. These claims remain subject to the Prompt 2 Ubuntu 22.04/24.04 CI gate; no test is considered passed until its real run output is observed. Directory sync returns a full snapshot rather than deltas. Router daemon live-revocation teardown is intentionally deferred to prompts 3–4. See docs/TRACEABILITY.md and docs/DEVIATIONS.md.
