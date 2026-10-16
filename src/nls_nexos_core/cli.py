@@ -124,12 +124,15 @@ def register(config_path: str, router_id: str, token: str,
             (router_id, public_key_sha256 or None, ipv6 or None, mac or None,
              hashlib.sha256(token.encode()).hexdigest(), now, now),
         )
+    metadata_supplied = bool(wan_endpoints or gateway_ips or prefixes or rsa_public_key_sha256)
     registry.set_directory_fields(
         router_id, wan_endpoints=list(wan_endpoints) if wan_endpoints else None,
         gateway_ips=list(gateway_ips) if gateway_ips else None,
         prefixes=list(prefixes) if prefixes else None,
         expected_rsa_public_key_sha256=rsa_public_key_sha256 or None,
     )
+    if not metadata_supplied:
+        registry.bump_directory_seq(router_id)
     registry.audit("ROUTER_REGISTERED", router_id, "registered by local administrator", now)
     print(f"Registered router: {router_id}")
 
