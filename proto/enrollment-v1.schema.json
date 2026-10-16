@@ -9,7 +9,9 @@
     "csr_pem",
     "request_id",
     "nonce",
-    "timestamp"
+    "timestamp",
+    "rsa_encryption_public_key",
+    "rsa_proof_of_possession"
   ],
   "properties": {
     "protocol_version": {
@@ -40,6 +42,8 @@
       "type": "integer",
       "minimum": 0
     },
+    "rsa_encryption_public_key": { "type": "string", "minLength": 100, "maxLength": 20000 },
+    "rsa_proof_of_possession": { "type": "string", "minLength": 80, "maxLength": 4096 },
     "claimed_ipv6": {
       "type": "string",
       "maxLength": 64
