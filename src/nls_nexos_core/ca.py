@@ -4,10 +4,11 @@ import hashlib
 import re
 import secrets
 import time
+import base64
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 
 from .database import Registry
@@ -74,6 +75,36 @@ class CertificateAuthority:
         if expected and not secrets.compare_digest(expected.lower(), key_fingerprint):
             raise EnrollmentDenied("enrollment denied")
 
+        # RSA encryption key and proof-of-possession are request-bound. Network
+        # metadata is deliberately not read from EnrollmentRequest.
+        try:
+            rsa_public = serialization.load_pem_public_key(req.rsa_encryption_public_key.encode("ascii"))
+            if not isinstance(rsa_public, rsa.RSAPublicKey) or rsa_public.key_size != 3072:
+                raise EnrollmentDenied("enrollment denied")
+            rsa_der = rsa_public.public_bytes(
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+            rsa_fingerprint = hashlib.sha256(rsa_der).hexdigest()
+            expected_rsa = router.get("expected_rsa_public_key_sha256")
+            if expected_rsa and not secrets.compare_digest(expected_rsa.lower(), rsa_fingerprint):
+                raise EnrollmentDenied("enrollment denied")
+            challenge = (
+                b"NLS-ENROLL-RSA-v1|" + req.router_id.encode("utf-8") + b"|" +
+                req.request_id.encode("ascii") + b"|" + req.nonce.encode("ascii") + b"|" +
+                rsa_fingerprint.encode("ascii")
+            )
+            proof = base64.b64decode(req.rsa_proof_of_possession.encode("ascii"), validate=True)
+            rsa_public.verify(
+                proof, challenge,
+                padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+                hashes.SHA256(),
+            )
+        except EnrollmentDenied:
+            raise
+        except Exception as exc:
+            self.registry.audit("ENROLL_DENIED", req.router_id, "RSA proof-of-possession failed", epoch)
+            raise EnrollmentDenied("enrollment denied") from exc
+
         if req.claimed_ipv6:
             try:
                 IPv6Address(req.claimed_ipv6)
@@ -128,6 +159,13 @@ class CertificateAuthority:
         tmp.chmod(0o640)
         tmp.replace(target)
         self.registry.record_certificate(serial_hex, req.router_id, before_s, after_s, cert_digest, epoch)
+        ed_pem = csr.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode("ascii")
+        rsa_pem = rsa_public.public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode("ascii")
+        self.registry.record_enrollment_keys(req.router_id, ed_pem, rsa_pem, epoch)
         self.registry.audit("CERT_ISSUED", req.router_id, f"serial={serial_hex}", epoch)
         return EnrollmentResponse(
             router_id=req.router_id,
