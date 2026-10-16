@@ -35,3 +35,8 @@
 ## Phase 0 gate
 
 **Result: INVENTORY WRITTEN; IMPLEMENTATION GATE NOT YET PASSED.** The core protocol/control/data-plane sources and relevant tests have been inspected at source level. The implementation has substantial gaps against R1–R14, so the next phase must not assume existing behavior matches the normative protocol. Before Phase 1, retain the current CLI, leave vtysh untouched, preserve GUI safety and default-disabled NLS, and do not create routes from CA metadata alone. No test command was executed as part of this source-only inventory.
+
+
+## Phase 0 follow-up
+
+This review remains a gate-only activity. No implementation changes are authorized. The existing CI workflow is being invoked on this feature branch to obtain reproducible Ubuntu test output; a successful workflow run does not by itself verify every operational behavior listed in the request.
