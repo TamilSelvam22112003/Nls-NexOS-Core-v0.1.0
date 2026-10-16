@@ -1,23 +1,61 @@
-# NLS Router-CA API specification — NLS v1 target
+# NLS Router-CA API specification — Prompt 2 implementation
 
-**Status:** normative target. Current TCP 4790 custom NLS Control Record Protocol implements health, enroll, sync, heartbeat, status and close. Lookup and signed directory operations below are not implemented by Prompt 1.
+**Status:** Router-CA lookup, signed directory bundles, enrollment RSA proof-of-possession, operator metadata, router revocation, and offline export are implemented on `feat/nls-v1`. The overall NLS product remains experimental and is not independently reviewed. CI evidence is the gate; this document does not imply that an unrun test passed.
 
-## Transport
-The control channel is custom experimental NLS Control Record Protocol v1 over TCP 4790, not TLS and not claimed TLS-interoperable. Current protocol uses a pinned Ed25519 control identity, signed handshake messages, X25519, HKDF-SHA256, directional AES-256-GCM records, bounded framing and sequence numbers. Independent cryptographic review remains mandatory before production use.
+## Transport and signer
 
-## Required operations
-- **health:** readiness and supported protocol version; does not imply directory freshness.
-- **enroll:** router_id, request_id, nonce, timestamp, bootstrap/router credentials, Ed25519 CSR, RSA-3072 encryption public key and proof of possession. Validate credentials, registry, freshness, persistent nonce/request uniqueness, CSR signature, RSA PoP and policy. Private keys never leave router. Return issued X.509 certificate and initial RDR/reference.
-- **lookup:** authenticated request router_id plus fresh random client_nonce (>=128 bits). Return signed RDR, exact nonce echo and issued_at/valid_until. Valid <=30 seconds. Verify pinned directory Ed25519 key, NLS-DIR-v1, nonce, certificate chain, serial, status, endpoints, keys and freshness. Unknown/revoked/disabled/expired/stale/mismatched results fail closed.
-- **directory-sync:** signed batch of RDRs, revoked serials, policy, issued_at and valid_until. Sign with directory Ed25519 key using NLS-DIR-v1 plus canonical CBOR. Default expiry 10 minutes; stale-grace=0. Offline mode is opt-in, verifies signed bundle and is marked degraded freshness.
-- **sync/heartbeat:** preserve current synchronization but make signed bundle authoritative. Heartbeat cannot extend old signatures or suppress revocation; stale trust fails closed.
-- **status:** authenticated router identity, certificate serial, status and record_seq; never private keys, tokens, session keys or unrelated private metadata.
-- **revoke-router:** authorized authenticated principal submits router_id, reason code, request_id, nonce and timestamp. Mark REVOKED, revoke serial, increment record_seq, invalidate old RDR/bundle versions and publish signed revocation state. Idempotent; audit reason codes only.
-- **close:** close authenticated channel and clear per-connection state.
+The control channel is the custom NLS Control Record Protocol v1 over TCP 4790. It is not TLS and is not claimed TLS-interoperable. Routers pin the control identity Ed25519 public key out of band. Directory signatures use the pinned control identity key and the exact preimage:
 
-## Router Directory Record
-Fields: router_id, ed25519_public_key, rsa_encryption_public_key, wan_endpoints, gateway_ips, prefixes, certificate_serial, status (ACTIVE/REVOKED/DISABLED/EXPIRED), record_seq, issued_at, valid_until, signature. Signature preimage is exact ASCII NLS-DIR-v1 followed by canonical CBOR of unsigned RDR. Lookup nonce binding is signed. X.509 issuer root and directory signer are distinct pins.
+```
+ASCII("NLS-DIR-v1") || cbor2.dumps(payload, canonical=True)
+```
 
-## Failure, limits, routing
-Use stable machine-readable errors without secrets. Bound frame size, record count, pending requests and expensive crypto; enforce timeouts and CA policy. No CA response creates a route: CA may authorize a prefix, but only operator route configuration creates routes.
-Current handlers are src/nls_nexos_core/api.py:handle_control_request and src/nls_nexos_core/control.py:NLSControlServer. Prompt 1 documents target only; it does not implement lookup, directory-sync, RSA PoP or revoke-router.
+The JSON control envelope carries `payload`, base64 `signer_public_key`, base64 `signature`, `encoding="canonical-cbor"`, and `domain="NLS-DIR-v1"`. The signature is over canonical CBOR, not JSON serialization. Routers reject signer mismatch, signature failure, malformed payload, nonce mismatch, expiry, and sequence rollback.
+
+## Enrollment
+
+`enroll` requires protocol_version, router_id, CSR PEM, request_id, nonce, timestamp, RSA-3072 encryption public key PEM, and RSA-PSS proof-of-possession. The proof uses SHA-256 and PSS with MAX_LENGTH salt over the request-bound challenge:
+
+```
+NLS-ENROLL-RSA-v1|router_id|request_id|nonce|hex(SHA256(RSA SubjectPublicKeyInfo DER))
+```
+
+The router's Ed25519 key is bound to its X.509 client certificate; the RSA key is bound to its directory record. If the administrator pre-registers an RSA SHA-256 fingerprint, enrollment must match it. WAN endpoints, gateway IPs and prefixes are accepted only through the local administrator CLI, never from an enrollment request. Reused request IDs or nonces are rejected.
+
+## Router directory record (RDR)
+
+Every signed RDR payload contains:
+- `router_id`
+- `ed25519_public_key` and `rsa_encryption_public_key` (PEM)
+- `wan_endpoints`, `gateway_ips`, and `prefixes` (operator-configured arrays)
+- `certificate_serial`
+- `status`: `ACTIVE`, `REVOKED`, `DISABLED`, `EXPIRED`, or `UNKNOWN`
+- monotonically increasing `record_seq`, `issued_at`, and `valid_until`
+
+A `lookup` request contains `type="lookup"`, the authenticated caller's `router_id`, `target_router_id`, and a fresh `client_nonce`. The response echoes the nonce and includes a signed RDR with the same nonce inside the signed payload. Lookup validity is at most 30 seconds. Unknown routers receive a signed `UNKNOWN` record. Only a Router-CA-issued client certificate that is currently valid and active in the registry can access directory data. Requests are rate-limited per authenticated router. Unauthenticated and denied lookups disclose no directory record and are audited without secrets.
+
+## Directory sync and heartbeat
+
+`directory-sync` accepts `since_seq` and returns a signed bundle containing `directory_seq`, signed RDRs, revoked serials, policy, `issued_at`, and `expires_at`. The default bundle lifetime is 600 seconds and the server caps it at 600 seconds. The implementation returns a full snapshot even when `since_seq` is current; it does not yet optimize to deltas.
+
+`sync` remains compatible and includes the signed bundle. `heartbeat` carries the current `directory_seq`, revocation state, policy, and signed bundle. A heartbeat cannot make an expired signature fresh. Routers reject stale bundles by default (`stale_grace_seconds=0`).
+
+## Administrative CLI
+
+- `nls-router-ca register-router ROUTER_ID --token-file FILE` preserves the protected token-file workflow and existing flags.
+- Repeat `--rsa-public-key-sha256 SHA256`, `--wan-endpoint IP:PORT` (bracket IPv6 as `[IPv6]:PORT`), `--gateway-ip IP`, and `--prefix CIDR` to set administrator-owned directory metadata.
+- `nls-router-ca revoke-router ROUTER_ID` revokes the router and all its active certificates.
+- `nls-router-ca revoke-certificate SERIAL` remains available.
+- `nls-router-ca export-directory --output FILE` writes an offline signed bundle for operator transfer.
+
+Registration metadata is validated before persistence. Directory changes increment the global `directory_seq` and the router's `record_seq`. SQLite migration uses `schema_version` and guarded, repeatable column additions; the migration path is tested against the prior schema.
+
+## Offline trust mode
+
+The operator imports a bundle on the router with `sudo nlsxnetos router-ca import FILE`. Import verifies the pinned control identity, canonical-CBOR signature, record signatures, expiry, and monotonic directory sequence before an atomic cache write. Cache reads re-verify signatures; unsigned `/etc/nlsxnetos/router-ca.yaml` is not a trust source. Offline mode still fails closed on expired bundle freshness by default and is operationally degraded because it cannot observe revocation after export.
+
+## Audit, failures and limitations
+
+Lookup, denied lookup, router revocation, and certificate revocation are audited without credentials or private material. Statuses are computed from registry state and certificate validity. Directory records authorize identities and prefixes but must never install Linux routes; route creation remains an operator action.
+
+The control protocol is a custom experimental protocol and requires independent cryptographic review. The directory bundle currently uses full snapshots rather than incremental deltas. Production hardening, soak tests, NAT behavior and independent review remain open until their own gates pass.
