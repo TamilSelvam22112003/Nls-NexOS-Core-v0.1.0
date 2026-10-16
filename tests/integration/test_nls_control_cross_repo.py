@@ -154,7 +154,7 @@ def test_router_enrolls_and_syncs_over_nls_control_v1(tmp_path):
             revoked_heartbeat = channel.recv()
             assert revoked_heartbeat["type"] == "heartbeat-result"
             assert serial in revoked_heartbeat["revocation_state"]["revoked_certificates"][0]["serial_number"]
-            _persist_bundle(client_cfg, revoked_heartbeat)
+            _persist_bundle(revoked_heartbeat, client_cfg)
             assert is_revoked(serial, client_cfg)
         finally:
             channel.close()
