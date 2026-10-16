@@ -165,7 +165,7 @@ def export_directory(config_path: str, output_path: str):
     target = __import__("pathlib").Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(bundle, sort_keys=True, separators=(",", ":")) + "\\n", encoding="utf-8")
+    tmp.write_text(json.dumps(bundle, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
     os.chmod(tmp, 0o640)
     os.replace(tmp, target)
     print(f"Exported signed directory bundle: {target}")
