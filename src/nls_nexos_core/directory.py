@@ -68,6 +68,9 @@ def record_for_router(registry, router_id: str, now: int | None = None, validity
             return value if isinstance(value, list) else []
         except (ValueError, TypeError):
             return []
+    record_valid_until = now + min(max(int(validity_seconds), 1), 600)
+    if status == "ACTIVE":
+        record_valid_until = min(record_valid_until, not_after)
     return {
         "router_id": router_id,
         "ed25519_public_key": router.get("ed25519_public_key"),
@@ -79,7 +82,7 @@ def record_for_router(registry, router_id: str, now: int | None = None, validity
         "status": status,
         "record_seq": int(router.get("record_seq") or 1),
         "issued_at": now,
-        "valid_until": now + min(max(int(validity_seconds), 1), 600),
+        "valid_until": record_valid_until,
     }
 
 
