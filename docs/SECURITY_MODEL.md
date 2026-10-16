@@ -1,23 +1,22 @@
-# Security Model
+# NLS Router-CA security model
 
 ## Assets
+CA certificate/private signing key, pinned Ed25519 directory/control identity, router Ed25519/RSA private keys, enrollment credentials, registry/database, certificate serials, signed RDRs/bundles, revocation, policy, session keys, audit records and route policy.
 
-CA signing key, NLS control identity key, router private keys, bootstrap and per-router tokens, router registry, issued certificates, policy/revocation state, and NLS data-plane session key material.
+## Trust anchors and key separation
+X.509 CA root validates router certificates. A separate Ed25519 control/directory key is pinned out of band and signs RDRs/bundles with NLS-DIR-v1 plus canonical CBOR. Router certificate binds CN=router_id to Ed25519 identity. RDR binds identity and RSA-3072 encryption key to endpoints, gateways, prefixes, serial, status, sequence and validity. Never implicitly substitute the certificate issuer key for the directory key.
 
-## Current controls
+## Enrollment
+Routers generate private keys locally. CA validates CSR signature, credentials, registry authorization, timestamp/nonce freshness, persistent uniqueness and proof of possession for the submitted RSA public key. No private or symmetric session key is transmitted. Record serial, identity, RSA key, authorized endpoints/gateways/prefixes, status and record_seq.
 
-- Routers pin the Router-CA Ed25519 control public key out-of-band.
-- Router certificate signing uses a separate CA signing key and pre-provisioned CA root certificate.
-- Router private keys are generated/stored locally and never transmitted.
-- First enrollment requires signed CSR proof, freshness/replay checks, a registered router, a global bootstrap credential and a router-specific credential inside an encrypted record.
-- Subsequent NLS control sessions require an issued identity certificate with matching Ed25519 key, valid issuer/time/EKU, active registry entry, and non-revoked serial.
-- Control records use ephemeral X25519, transcript-bound HKDF-SHA-256, directional AES-256-GCM, and strict record sequence validation.
-- SQL statements are parameterized; enrollment request IDs/nonces are persistent and uniqueness-constrained; logs exclude credentials.
+## Signed records and freshness
+Lookup(router_id, client_nonce) returns signed RDR plus nonce echo and is valid <=30 seconds. Bundle contains signed RDRs, revoked serials, policy, issued_at and valid_until; default expiry 10 minutes. stale-grace defaults to zero. Offline mode is explicit, verifies imported signed bundle, visibly marks degraded freshness and fails closed at expiry. Unsigned Router-CA YAML is not a trust source. Status values ACTIVE/REVOKED/DISABLED/EXPIRED. Revocation increments record_seq and is enforced at handshake and session refresh.
 
-## Important qualification
+## Control channel and qualification
+Current control channel is custom, not TLS. It uses signed handshakes, pinned identity, X25519, HKDF-SHA256, directional AES-256-GCM records and sequence validation. This is not proof of soundness. Independent protocol review, formal analysis, hostile-network tests and deployment hardening are required before critical use.
 
-The NLS Control Record Protocol is **custom experimental cryptography, not TLS**. Code and CI success do not establish cryptographic soundness. It has not received independent cryptographic review, formal verification, or hostile-network interoperability testing. Do not deploy to critical or untrusted production networks until the wire protocol is reviewed and signed off by qualified cryptographers.
+## Routing isolation and audit
+CA metadata may authorize a peer/prefix but never create routes. Only operator-configured nls route PREFIX via ROUTER-ID entries install TUN routes. Destination validates decrypted inner source against source RDR prefixes by default. Use stable reason codes; never log credentials, keys, decrypted packets, tokens or canaries. Use parameterized SQL and transactions. Bound frames, pending requests, connections and expensive crypto. Rate-limit by observed source, never claimed identity.
 
-## Remaining operational work
-
-TPM attestation, HSM protection, HA, automated certificate renewal, robust rate limiting, administrator authentication/API, signed CRL/OCSP publishing, revocation refresh/expiry policy, and multi-host IPv6 testing.
+## Current gaps
+Current API supports existing enrollment/sync/heartbeat/status only. Signed RDR lookup, directory-sync, RSA enrollment PoP and revoke-router are not implemented in Prompt 1. See docs/TRACEABILITY.md and docs/DEVIATIONS.md.

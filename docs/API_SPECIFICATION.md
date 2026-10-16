@@ -1,28 +1,23 @@
-# NLS Control Record Protocol v1: Control Operations
+# NLS Router-CA API specification — NLS v1 target
 
-This repository implements a **custom experimental NLS control protocol over TCP**. It is not TLS, not HTTP, and does not claim interoperability with TLS implementations. The default control port is 4790; NLS user-data transport remains separate (typically UDP 4789).
+**Status:** normative target. Current TCP 4790 custom NLS Control Record Protocol implements health, enroll, sync, heartbeat, status and close. Lookup and signed directory operations below are not implemented by Prompt 1.
 
-## Handshake and records
+## Transport
+The control channel is custom experimental NLS Control Record Protocol v1 over TCP 4790, not TLS and not claimed TLS-interoperable. Current protocol uses a pinned Ed25519 control identity, signed handshake messages, X25519, HKDF-SHA256, directional AES-256-GCM records, bounded framing and sequence numbers. Independent cryptographic review remains mandatory before production use.
 
-The protocol uses Ed25519-signed hello messages, a pre-provisioned Router-CA control public-key pin, fresh X25519 ephemeral key agreement, transcript-bound HKDF-SHA-256 derivation, directional AES-256-GCM records, bounded framing and strict monotonic sequence numbers. Each peer confirms the derived session transcript before sending application messages.
+## Required operations
+- **health:** readiness and supported protocol version; does not imply directory freshness.
+- **enroll:** router_id, request_id, nonce, timestamp, bootstrap/router credentials, Ed25519 CSR, RSA-3072 encryption public key and proof of possession. Validate credentials, registry, freshness, persistent nonce/request uniqueness, CSR signature, RSA PoP and policy. Private keys never leave router. Return issued X.509 certificate and initial RDR/reference.
+- **lookup:** authenticated request router_id plus fresh random client_nonce (>=128 bits). Return signed RDR, exact nonce echo and issued_at/valid_until. Valid <=30 seconds. Verify pinned directory Ed25519 key, NLS-DIR-v1, nonce, certificate chain, serial, status, endpoints, keys and freshness. Unknown/revoked/disabled/expired/stale/mismatched results fail closed.
+- **directory-sync:** signed batch of RDRs, revoked serials, policy, issued_at and valid_until. Sign with directory Ed25519 key using NLS-DIR-v1 plus canonical CBOR. Default expiry 10 minutes; stale-grace=0. Offline mode is opt-in, verifies signed bundle and is marked degraded freshness.
+- **sync/heartbeat:** preserve current synchronization but make signed bundle authoritative. Heartbeat cannot extend old signatures or suppress revocation; stale trust fails closed.
+- **status:** authenticated router identity, certificate serial, status and record_seq; never private keys, tokens, session keys or unrelated private metadata.
+- **revoke-router:** authorized authenticated principal submits router_id, reason code, request_id, nonce and timestamp. Mark REVOKED, revoke serial, increment record_seq, invalidate old RDR/bundle versions and publish signed revocation state. Idempotent; audit reason codes only.
+- **close:** close authenticated channel and clear per-connection state.
 
-These measures are an experimental design, not a substitute for an independent cryptographic review. The wire protocol has not been formally verified or audited and must not be used for critical production/defence traffic before review.
+## Router Directory Record
+Fields: router_id, ed25519_public_key, rsa_encryption_public_key, wan_endpoints, gateway_ips, prefixes, certificate_serial, status (ACTIVE/REVOKED/DISABLED/EXPIRED), record_seq, issued_at, valid_until, signature. Signature preimage is exact ASCII NLS-DIR-v1 followed by canonical CBOR of unsigned RDR. Lookup nonce binding is signed. X.509 issuer root and directory signer are distinct pins.
 
-## Messages
-
-- `health`: service and protocol readiness.
-- `enroll`: CSR, request ID, nonce, timestamp, global bootstrap credential, and router-specific credential, carried inside encrypted records.
-- `sync`: requires a valid Router-CA-issued identity certificate and returns versioned policy/revocation state.
-- `heartbeat`: requires a valid certificate and returns updated policy/revocation state on a persistent connection.
-- `status`: requires a valid certificate and returns the authenticated router identity and certificate serial.
-- `close`: closes the record channel.
-
-## Identity and key handling
-
-The router private key never leaves the router. Router-CA signs an identity certificate only after validating the CSR signature, registry authorization, credentials, freshness and anti-replay state. Subsequent control connections validate issuer, validity, certificate purpose, public-key binding, registry status and revocation state.
-
-The peers derive NLS data-plane session keys locally through X25519/HKDF. The CA sends policy parameters, never raw symmetric keys. Ordinary outer IP destination fields needed for routing remain visible; protected original endpoints and packet payload belong inside an authenticated-encrypted NLS inner packet.
-
-## Revocation and limitations
-
-`nls-router-ca revoke-certificate SERIAL` marks an active certificate revoked. New control connections are refused and connected peers receive revocation state during heartbeats. Robust refresh/expiry policy, signed CRL/OCSP distribution, automated certificate renewal, TPM/HSM support, administration API and rate limiting remain future work.
+## Failure, limits, routing
+Use stable machine-readable errors without secrets. Bound frame size, record count, pending requests and expensive crypto; enforce timeouts and CA policy. No CA response creates a route: CA may authorize a prefix, but only operator route configuration creates routes.
+Current handlers are src/nls_nexos_core/api.py:handle_control_request and src/nls_nexos_core/control.py:NLSControlServer. Prompt 1 documents target only; it does not implement lookup, directory-sync, RSA PoP or revoke-router.
