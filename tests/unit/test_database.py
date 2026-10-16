@@ -1,3 +1,5 @@
+import time
+
 from nls_nexos_core.database import Registry
 
 def test_schema_and_router_lookup(tmp_path):
