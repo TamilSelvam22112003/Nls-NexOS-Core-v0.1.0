@@ -29,6 +29,8 @@ class NLSControlServer:
         self.control_identity_key = control_identity_key
         self._seen_nonces: dict[str, float] = {}
         self._nonce_lock = threading.Lock()
+        self._lookup_times: dict[str, list[float]] = {}
+        self._lookup_lock = threading.Lock()
         self._stopping = threading.Event()
 
     def _fresh_nonce(self, nonce: str) -> bool:
@@ -96,12 +98,28 @@ class NLSControlServer:
         return self._authorize_client_certificate(hello)
 
     def _dispatch(self, message: dict, auth: dict | None) -> dict:
+        action = message.get("type") if isinstance(message, dict) else None
+        if action in ("lookup", "directory-sync"):
+            if not auth:
+                self.registry.audit("DIRECTORY_LOOKUP_DENIED", None, "missing active client certificate", int(time.time()))
+                return {"type": "error", "code": "not-authorized", "message": "directory access denied"}
+            router_id = auth["router_id"]
+            now = time.monotonic()
+            with self._lookup_lock:
+                recent = [t for t in self._lookup_times.get(router_id, []) if now - t < 60]
+                if len(recent) >= 30:
+                    self.registry.audit("DIRECTORY_LOOKUP_DENIED", router_id, "rate limit exceeded", int(time.time()))
+                    self._lookup_times[router_id] = recent
+                    return {"type": "error", "code": "rate-limited", "message": "directory request rate limit exceeded"}
+                recent.append(now)
+                self._lookup_times[router_id] = recent
         return handle_control_request(
             message=message,
             authority=self.authority,
             registry=self.registry,
             settings=self.settings,
             authenticated_router=auth,
+            control_identity_key=self.control_identity_key,
         )
 
     def _handle_client(self, conn: socket.socket, address) -> None:
