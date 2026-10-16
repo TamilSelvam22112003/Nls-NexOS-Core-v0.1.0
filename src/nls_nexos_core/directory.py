@@ -34,6 +34,7 @@ def sign_payload(payload: dict, private_key: Ed25519PrivateKey) -> dict:
 
 def record_for_router(registry, router_id: str, now: int | None = None, validity_seconds: int = 30) -> dict | None:
     now = int(time.time()) if now is None else int(now)
+    registry.expire_certificates(now)
     router = registry.get_router(router_id)
     if not router:
         return None
