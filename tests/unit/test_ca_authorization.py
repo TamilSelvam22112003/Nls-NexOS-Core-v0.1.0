@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import base64
 import hashlib
 
 import pytest
@@ -46,16 +47,30 @@ def _settings(tmp_path, cert, key):
     )
 
 
-def _request(router_id, router_private_key, token, timestamp, suffix):
+def _request(router_id, router_private_key, token, timestamp, suffix, rsa_private_key=None):
     csr = x509.CertificateSigningRequestBuilder().subject_name(
         x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, router_id)])
     ).sign(router_private_key, algorithm=None)
+    rsa_private_key = rsa_private_key or rsa.generate_private_key(public_exponent=65537, key_size=3072)
+    rsa_public = rsa_private_key.public_key()
+    rsa_pem = rsa_public.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode("ascii")
+    rsa_der = rsa_public.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    fingerprint = hashlib.sha256(rsa_der).hexdigest()
+    request_id = "req-" + suffix + "-" + "a" * 24
+    nonce = hashlib.sha256((router_id + token + suffix).encode()).hexdigest()
+    challenge = (b"NLS-ENROLL-RSA-v1|" + router_id.encode() + b"|" + request_id.encode() +
+                 b"|" + nonce.encode() + b"|" + fingerprint.encode())
+    proof = rsa_private_key.sign(
+        challenge,
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+        hashes.SHA256(),
+    )
     return EnrollmentRequest(
         protocol_version=1, router_id=router_id,
         csr_pem=csr.public_bytes(serialization.Encoding.PEM).decode("ascii"),
-        request_id="req-" + suffix + "-" + "a" * 24,
-        nonce=hashlib.sha256((router_id + token + suffix).encode()).hexdigest(),
-        timestamp=timestamp,
+        request_id=request_id, nonce=nonce, timestamp=timestamp,
+        rsa_encryption_public_key=rsa_pem,
+        rsa_proof_of_possession=base64.b64encode(proof).decode("ascii"),
     )
 
 
