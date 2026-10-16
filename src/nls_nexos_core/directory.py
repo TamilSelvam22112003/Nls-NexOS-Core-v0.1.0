@@ -32,7 +32,7 @@ def sign_payload(payload: dict, private_key: Ed25519PrivateKey) -> dict:
     }
 
 
-def record_for_router(registry, router_id: str, now: int | None = None) -> dict | None:
+def record_for_router(registry, router_id: str, now: int | None = None, validity_seconds: int = 30) -> dict | None:
     now = int(time.time()) if now is None else int(now)
     router = registry.get_router(router_id)
     if not router:
@@ -79,7 +79,7 @@ def record_for_router(registry, router_id: str, now: int | None = None) -> dict 
         "status": status,
         "record_seq": int(router.get("record_seq") or 1),
         "issued_at": now,
-        "valid_until": min(now + 30, not_after),
+        "valid_until": min(now + min(max(int(validity_seconds), 1), 600), not_after),
     }
 
 
@@ -93,7 +93,7 @@ def signed_directory_bundle(registry, settings, private_key: Ed25519PrivateKey,
     now = int(time.time()) if now is None else int(now)
     records = []
     for router in registry.list_routers():
-        record = record_for_router(registry, router["router_id"], now)
+        record = record_for_router(registry, router["router_id"], now, validity_seconds=600)
         if record is not None:
             records.append(sign_payload(record, private_key))
     with registry.connect() as con:
