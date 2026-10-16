@@ -83,9 +83,14 @@ def record_for_router(registry, router_id: str, now: int | None = None, validity
     }
 
 
-def signed_rdr(registry, router_id: str, private_key: Ed25519PrivateKey, now: int | None = None):
+def signed_rdr(registry, router_id: str, private_key: Ed25519PrivateKey,
+               now: int | None = None, client_nonce: str | None = None):
     record = record_for_router(registry, router_id, now)
-    return sign_payload(record, private_key) if record is not None else None
+    if record is None:
+        return None
+    if client_nonce is not None:
+        record["client_nonce"] = client_nonce
+    return sign_payload(record, private_key)
 
 
 def signed_directory_bundle(registry, settings, private_key: Ed25519PrivateKey,
