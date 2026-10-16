@@ -40,3 +40,78 @@
 ## Phase 0 follow-up
 
 This review remains a gate-only activity. No implementation changes are authorized. The existing CI workflow is being invoked on this feature branch to obtain reproducible Ubuntu test output; a successful workflow run does not by itself verify every operational behavior listed in the request.
+
+
+## Supplemental Phase 0 verification (2026-10-16)
+
+### Source-file coverage
+
+Fetched and indexed every tracked file matching the repositories' executable/configuration/test extensions at the reviewed main-tree SHAs: 133 files in NlsxNetOS and 24 files in Nls-NexOS-Core. This included Python modules, shell scripts, systemd units, YAML/TOML/JSON configuration, CI workflows and tests. Function/class declarations and security-sensitive operations were indexed across these files; core NLS handshake, daemon, encapsulation, replay, route, CLI, installer, AppArmor, Router-CA API/control, enrollment and database paths were also read directly. Non-code documentation was not treated as implementation evidence.
+
+### Baseline automated tests (GitHub-hosted Ubuntu runners)
+
+These runs were triggered from documentation-only feature branches. No implementation file changed. Test output below is from the repository CI logs; the pytest result lines are reproduced verbatim.
+
+**NlsxNetOS, Ubuntu 22.04 — unit + security**
+```text
+2026-10-16T04:45:27.4544900Z ......................................................                   [100%]
+2026-10-16T04:45:27.4545267Z 54 passed in 4.04s
+```
+
+**NlsxNetOS, Ubuntu 24.04 — unit + security**
+```text
+2026-10-16T04:45:32.3249153Z ......................................................                   [100%]
+2026-10-16T04:45:32.3250601Z 54 passed in 6.95s
+```
+
+**NlsxNetOS, Ubuntu 24.04 — four-node forwarding integration**
+```text
+2026-10-16T04:45:36.0501697Z .                                                                        [100%]
+2026-10-16T04:45:36.0502306Z 1 passed in 16.79s
+```
+
+**NlsxNetOS, Ubuntu 24.04 — ten-router IPv6 chain integration**
+```text
+2026-10-16T04:45:29.2847436Z .                                                                        [100%]
+2026-10-16T04:45:29.2847769Z 1 passed in 7.73s
+```
+
+**Nls-NexOS-Core, Ubuntu 24.04 — unit + security**
+```text
+2026-10-16T04:45:25.2328104Z ..............                                                           [100%]
+2026-10-16T04:45:25.2328946Z 14 passed in 0.80s
+```
+
+**Cross-repository control integration, Ubuntu 22.04**
+```text
+2026-10-16T04:45:26.1105610Z .                                                                        [100%]
+2026-10-16T04:45:26.1151611Z 1 passed, 8 warnings in 1.50s
+```
+
+**Cross-repository control integration, Ubuntu 24.04**
+```text
+2026-10-16T04:45:25.6656406Z .                                                                        [100%]
+2026-10-16T04:45:25.6683976Z 1 passed, 8 warnings in 1.51s
+```
+
+All jobs in router CI run 38852215428 and CA CI run 38852227009 completed successfully. Router CI also passed package build/install/reinstall/purge/reinstall, fresh-install checks on Ubuntu 22.04 and 24.04, source-integrity check, dependency audit and ShellCheck. CA CI's unit job passed compilation and tests. The cross-repository integration emits eight Python/cryptography datetime deprecation warnings; those warnings are not test failures. These existing suites do not cover the required new M1–M4/vIP/session-AEAD attack matrix.
+
+### Compatibility and behavior preservation evidence
+
+- **No source behavior changed in this gate branch:** the only changes in the gate commits are this inventory document. CLI, runtime, systemd, AppArmor, package and route source files are unchanged relative to main. CI run links: [NlsxNetOS run 38852215428](https://github.com/TamilSelvam22112003/NlsxNetOS-v0.1.0/actions/runs/38852215428), [Nls-NexOS-Core run 38852227009](https://github.com/TamilSelvam22112003/Nls-NexOS-Core-v0.1.0/actions/runs/38852227009).
+- **CLI:** tools/router_cli/commands.py:main, interactive_cli retain the `nlsxnetos` subcommands and IOS-like interactive modes. No CLI source was modified.
+- **vtysh/FRR:** scripts/build/deb.sh rejects package contents containing /etc/frr, /usr/lib/frr, /usr/bin/vtysh or FRR daemons; .github/workflows/ci.yml repeats that package-ownership assertion and runs `vtysh -c "show version"`. net/validation.py:frr_validate deliberately reports vtysh unavailable inside AppArmor confinement rather than invoking it there; tests/unit/test_frr_validation.py:test_confined_frr_validation_fails_closed_without_vtysh and test_unconfined_frr_validation_executes_vtysh cover this distinction. This is evidence that packaging does not own/replace vtysh and CI can invoke it, not a claim that every administrator workflow was manually exercised.
+- **GUI safety:** scripts/install/install.sh does not remove desktop packages; it installs ubuntu-desktop-minimal and Firefox only for explicit `--with-gui`. scripts/install/uninstall.sh purges only nlsxnetos and states FRR is left installed. scripts/build/deb.sh removes only generated packaging/deb staging subdirectories and dist, not the host desktop. This behavior was not modified.
+- **NLS default/registration:** config/nls/nls.yaml sets enabled=false and tun.enabled=false; nls/config.py:NLSConfig defaults are false; nls/daemon.py:run refuses to run when disabled, without active Router-CA entries, or without TUN enabled. nls/activation.py:activate checks for active entries and an enabled WAN interface. Caveat: activate checks that some Router-CA entry is NLS-ready, not explicitly that the local identity matches that entry; nls/daemon.py:_send_init later enforces that identity match before sending INIT.
+- **Route-management caveat (important):** nls/config.py:load with auto_router_ca=true imports active Router-CA entries as PeerConfig objects and assigns each entry's prefix to allowed_prefixes; nls/daemon.py:run calls nls/routing.py:install_tun_routes on all configured peers; install_tun_routes creates a TUN route for any missing allowed prefix. Therefore, in the current main branch, a Router-CA entry can indirectly cause route installation through auto_router_ca. The requested invariant “no route creation from CA metadata alone” is **not currently satisfied**. This gate made no route-source changes, so it did not introduce the behavior, but I cannot confirm that invariant as currently true.
+- **No test failures occurred in the CI runs above.** No manual VM tests were performed by this review.
+
+### Explicit public-key forgery assessment (R10)
+
+**Yes, the current data-plane construction permits cryptographic packet forgery using the destination router's RSA public key, subject to session admission checks.** In nls/encapsulation.py:seal_ip_packet, the sender generates a fresh attacker-selectable AES key with secrets.token_bytes(32), wraps it using nls/rsa.py:wrap_key (RSA-OAEP-SHA256 to the destination public key), then authenticates/encrypts the packet with AESGCM(data_key). A receiver decrypts the wrapped key with its private key and accepts a valid AES-GCM tag in open_ip_packet; no sender Ed25519 signature or session-derived directional data key authenticates the DATA packet. An attacker can therefore construct a valid AEAD ciphertext for a chosen inner packet and wrap the key to the destination's public key.
+
+**Acceptance is not unconditional from the public key alone:** nls/daemon.py:NLSDaemon._handle_data also requires an existing session ID, the packet's source endpoint to match session.endpoint, expected router identity and an acceptable sequence in ReplayWindow. An attacker who does not know or cannot satisfy those session/source constraints may be rejected. Those checks do not fix the cryptographic design flaw if an attacker can observe/reuse session metadata and deliver from an accepted endpoint or spoof it. This is why D1's sender-authenticated, HKDF-derived directional AEAD is required.
+
+### Updated Phase 0 gate result
+
+**NOT PASSED. Do not start Phase 1 yet.** The existing CI suites pass, and the gate branch did not change implementation code. However, the current implementation materially fails R2–R7 and R8–R10 as described above, and the current `auto_router_ca` path contradicts the requested “no route creation from CA metadata alone” invariant. Phase 0 has documented these gaps and existing test results; this report is not an approval to proceed to Phase 1.
