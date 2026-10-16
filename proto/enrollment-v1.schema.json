@@ -51,10 +51,6 @@
     "claimed_mac": {
       "type": "string",
       "maxLength": 32
-    },
-    "public_key_fingerprint": {
-      "type": "string",
-      "maxLength": 128
     }
   }
 }
