@@ -140,13 +140,13 @@ def test_router_enrolls_and_syncs_over_nls_control_v1(tmp_path):
             assert isinstance(heartbeat["directory_seq"], int)
             assert "revocation_state" in heartbeat
 
-        record = lookup(client_cfg, identity, "edge-test")
-        assert record["router_id"] == "edge-test"
-        assert record["status"] == "ACTIVE"
-        assert 0 < record["valid_until"] - int(time.time()) <= 30
-        bundle = directory_sync(client_cfg, identity)
-        assert bundle["directory_seq"] >= 1
-        assert any(item["payload"]["router_id"] == "edge-test" for item in bundle["records"])
+            record = lookup(client_cfg, identity, "edge-test")
+            assert record["router_id"] == "edge-test"
+            assert record["status"] == "ACTIVE"
+            assert 0 < record["valid_until"] - int(time.time()) <= 30
+            bundle = directory_sync(client_cfg, identity)
+            assert bundle["directory_seq"] >= 1
+            assert any(item["payload"]["router_id"] == "edge-test" for item in bundle["records"])
         finally:
             channel.close()
     finally:
