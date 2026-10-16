@@ -141,3 +141,41 @@ def test_missing_router_token_binding_denies_enrollment(tmp_path):
     request = _request("unbound-router", key, token, now, "unbound")
     with pytest.raises(EnrollmentDenied):
         authority.enroll(request, token, token)
+
+
+
+def test_rsa_proof_of_possession_and_registered_fingerprint(tmp_path):
+    ca_cert, ca_key = _ca_files(tmp_path)
+    settings = _settings(tmp_path, ca_cert, ca_key)
+    registry = Registry(settings.database_path)
+    bootstrap = "bootstrap-" + "p" * 48
+    token = "router-" + "q" * 48
+    now = int(datetime.now(timezone.utc).timestamp())
+    _register(registry, "router-pop", token, now)
+    authority = CertificateAuthority(settings, registry, bootstrap)
+    identity = ed25519.Ed25519PrivateKey.generate()
+    valid = _request("router-pop", identity, token, now, "valid-pop")
+    bad = valid.model_copy(update={"rsa_proof_of_possession": base64.b64encode(b"x" * 384).decode("ascii")})
+    with pytest.raises(EnrollmentDenied):
+        authority.enroll(bad, bootstrap, token)
+    authority.enroll(valid, bootstrap, token)
+    with pytest.raises(EnrollmentDenied):
+        authority.enroll(valid, bootstrap, token)
+
+
+def test_admin_registered_rsa_fingerprint_must_match(tmp_path):
+    ca_cert, ca_key = _ca_files(tmp_path)
+    settings = _settings(tmp_path, ca_cert, ca_key)
+    registry = Registry(settings.database_path)
+    bootstrap = "bootstrap-" + "f" * 48
+    token = "router-" + "g" * 48
+    now = int(datetime.now(timezone.utc).timestamp())
+    _register(registry, "router-fp", token, now)
+    with registry.connect() as con:
+        con.execute("UPDATE routers SET expected_rsa_public_key_sha256=? WHERE router_id=?",
+                    ("0" * 64, "router-fp"))
+    authority = CertificateAuthority(settings, registry, bootstrap)
+    identity = ed25519.Ed25519PrivateKey.generate()
+    request = _request("router-fp", identity, token, now, "fp-mismatch")
+    with pytest.raises(EnrollmentDenied):
+        authority.enroll(request, bootstrap, token)
