@@ -130,7 +130,10 @@ class NLSControlServer:
             now = time.monotonic()
             with self._lookup_lock:
                 recent = [t for t in self._lookup_times.get(router_id, []) if now - t < 60]
-                if len(recent) >= 30:
+                # A single authenticated NLS handshake can require fresh peer and
+                # local RDR lookups on both ends. Keep a bounded per-router limit,
+                # but allow the required repeated-rekey acceptance exercise.
+                if len(recent) >= 120:
                     self.registry.audit("DIRECTORY_LOOKUP_DENIED", router_id, "rate limit exceeded", int(time.time()))
                     self._lookup_times[router_id] = recent
                     return {"type": "error", "code": "rate-limited", "message": "directory request rate limit exceeded"}
