@@ -159,13 +159,15 @@ class CertificateAuthority:
         tmp.chmod(0o640)
         tmp.replace(target)
         self.registry.record_certificate(serial_hex, req.router_id, before_s, after_s, cert_digest, epoch)
-        ed_pem = csr.public_key().public_bytes(
-            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
-        ).decode("ascii")
+        # RDR ed25519_public_key is the standard-base64 encoding of the raw 32-byte
+        # Ed25519 public key consumed by NlsxNetOS. The X.509 certificate remains PEM.
+        ed_raw_b64 = base64.b64encode(csr.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )).decode("ascii")
         rsa_pem = rsa_public.public_bytes(
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
         ).decode("ascii")
-        self.registry.record_enrollment_keys(req.router_id, ed_pem, rsa_pem, epoch)
+        self.registry.record_enrollment_keys(req.router_id, ed_raw_b64, rsa_pem, epoch)
         self.registry.audit("CERT_ISSUED", req.router_id, f"serial={serial_hex}", epoch)
         return EnrollmentResponse(
             router_id=req.router_id,
