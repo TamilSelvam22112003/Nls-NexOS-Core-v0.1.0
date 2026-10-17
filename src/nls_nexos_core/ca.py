@@ -15,6 +15,16 @@ from .database import Registry
 from .models import EnrollmentRequest, EnrollmentResponse
 
 
+def rdr_ed25519_public_key_b64(public_key) -> str:
+    """Encode an RDR Ed25519 identity key as standard base64 of its raw 32 bytes."""
+    raw = public_key.public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    if len(raw) != 32:
+        raise ValueError("RDR Ed25519 public key must be 32 raw bytes")
+    return base64.b64encode(raw).decode("ascii")
+
+
 class EnrollmentDenied(Exception):
     """The router does not satisfy enrollment policy."""
 
@@ -161,9 +171,7 @@ class CertificateAuthority:
         self.registry.record_certificate(serial_hex, req.router_id, before_s, after_s, cert_digest, epoch)
         # RDR ed25519_public_key is the standard-base64 encoding of the raw 32-byte
         # Ed25519 public key consumed by NlsxNetOS. The X.509 certificate remains PEM.
-        ed_raw_b64 = base64.b64encode(csr.public_key().public_bytes(
-            serialization.Encoding.Raw, serialization.PublicFormat.Raw
-        )).decode("ascii")
+        ed_raw_b64 = rdr_ed25519_public_key_b64(csr.public_key())
         rsa_pem = rsa_public.public_bytes(
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
         ).decode("ascii")
