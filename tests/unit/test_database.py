@@ -33,7 +33,7 @@ def test_legacy_schema_migration_is_idempotent(tmp_path):
     assert router["record_seq"] == 1
     assert router["wan_endpoints"] == "[]"
     with db.connect() as migrated:
-        assert migrated.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+        assert migrated.execute("SELECT version FROM schema_version").fetchone()[0] == 4
         assert router["original_ip_usable"] == 0
         columns = {row["name"] for row in migrated.execute("PRAGMA table_info(routers)")}
         assert {"ed25519_public_key", "rsa_encryption_public_key", "gateway_ips", "prefixes"} <= columns
@@ -95,3 +95,38 @@ def test_wan_endpoint_order_and_original_ip_validation(tmp_path):
         with pytest.raises(ValueError):
             db.set_directory_fields("edge-endpoints", wan_endpoints=invalid)
     assert json.loads(db.get_router("edge-endpoints")["wan_endpoints"]) == ["[fd42:100::1]:4790", "192.0.2.8:4791"]
+
+
+
+def test_original_ip_is_unique_across_usable_routers(tmp_path):
+    import pytest
+    db = Registry(tmp_path / "unique-original-ip.sqlite3")
+    now = int(time.time())
+    with db.connect() as con:
+        for router_id in ("router-a", "router-b"):
+            con.execute(
+                "INSERT INTO routers(router_id,registered,status,created_at,updated_at) VALUES(?,1,'ACTIVE',?,?)",
+                (router_id, now, now),
+            )
+    db.set_directory_fields("router-a", wan_endpoints=["[fd42:100::1]:4790"])
+    with pytest.raises(ValueError, match="originalIP must be unique"):
+        db.set_directory_fields("router-b", wan_endpoints=["[fd42:100::1]:4791"])
+    assert db.get_router("router-a")["original_ip_usable"] == 1
+    assert db.get_router("router-b")["original_ip_usable"] == 0
+
+
+def test_disable_router_advances_sequences_and_revoked_router_cannot_be_enabled(tmp_path):
+    db = Registry(tmp_path / "router-status.sqlite3")
+    now = int(time.time())
+    with db.connect() as con:
+        con.execute(
+            "INSERT INTO routers(router_id,registered,status,created_at,updated_at) VALUES(?,1,'ACTIVE',?,?)",
+            ("router-status", now, now),
+        )
+    before = db.directory_seq()
+    assert db.set_router_status("router-status", "DISABLED", now + 1)
+    assert db.get_router("router-status")["status"] == "DISABLED"
+    assert db.directory_seq() == before + 1
+    assert db.set_router_status("router-status", "ACTIVE", now + 2)
+    assert db.revoke_router("router-status", now + 3)
+    assert not db.set_router_status("router-status", "ACTIVE", now + 4)
