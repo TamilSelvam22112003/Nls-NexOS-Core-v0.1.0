@@ -132,14 +132,7 @@ The derived vIP is temporary and is valid only for this handshake. It MUST be as
 
 #### Versioned vIP address policy
 
-`vip_policy_version = 1` requires the candidate IPv6 address to lie within IPv6 Global Unicast space `2000::/3` and not fall within any excluded range in this policy. Policy v1 MUST exclude at least:
-- `2001:db8::/32` (documentation);
-- `2001::/23` (IETF protocol assignments and special-purpose space);
-- `2001::/32` (Teredo);
-- `2001:2::/48` (benchmarking);
-- `2001:10::/28` and `2001:20::/28` (ORCHID / ORCHIDv2);
-- `2002::/16` (6to4);
-- `3fff::/20` (documentation).
+`vip_policy_version = 1` requires the candidate IPv6 address to lie within IPv6 Global Unicast space `2000::/3` and not fall within any excluded range in this policy. The following commonly recognized exclusions are **informative only**; the pinned literal table in “Policy-v1 pinned registry snapshot” is normative and defines the complete policy-v1 exclusion set.
 
 #### Policy-v1 pinned registry snapshot
 
@@ -149,7 +142,7 @@ Policy v1 approves **no** IANA special-purpose prefix for vIP use. Therefore, ev
 - Registry's recorded **Last Updated** date: `2025-10-09`
 - Snapshot captured for this specification: `2026-10-18`
 - Table serialization for hashing: the CIDR prefixes below, one per line in the exact order shown, ASCII lowercase, LF line endings, including one final LF, with no whitespace or comments.
-- SHA-256 of that exact serialized table: `ce96b8ce001ceeeff4c0c1c5682a514c0dd831969481e3e73583999a3320288c`
+- SHA-256 of that exact serialized table: `6639dadc8a64373a682874fb8e83e16a7e6898463b91c74da09c756527ab57ad`
 
 | Literal exclusion prefix | Registry designation |
 |---|---|
@@ -168,15 +161,12 @@ Policy v1 approves **no** IANA special-purpose prefix for vIP use. Therefore, ev
 | `2002::/16` | 6to4 |
 | `2620:4f:8000::/48` | Direct Delegation AS112 Service |
 | `3fff::/20` | Documentation |
-| `5f00::/16` | Segment Routing (SRv6) SIDs |
 
 Implementations MUST embed this exact literal table and MUST NOT read, download, or otherwise consult the host's IANA registry data at runtime. S and D MUST use the same pinned table and hash. A future table change requires a new `vip_policy_version`, a new table hash, and explicit protocol-specification change; implementations MUST reject unknown versions. The `2000::/3` inclusion check remains mandatory in addition to this exclusion table.
 
 Add boundary tests for the start, end, and adjacent addresses of `2000::/3` and every table prefix. Tests MUST cover accepted addresses immediately outside excluded ranges where those addresses remain inside `2000::/3`, rejection of addresses in every exclusion (including nested/overlapping entries), and rejection of unknown `vip_policy_version` values. The version is part of M1's signed and sealed fields.
 
-#### Lab-only temporary route
-
-#### Explicit lab-route configuration switch
+#### Lab-only temporary route and explicit configuration switch
 
 The lab-only temporary route is controlled by the configuration key `vip.lab_temporary_route.enabled`, a Boolean whose default MUST be `false`. If the key is absent, invalid, or false, D MUST NOT install this route. Enabling it MUST require an explicit operator configuration in a controlled lab deployment; production configurations MUST leave it disabled, and a production-mode configuration MUST reject an attempt to enable it. This switch MUST NOT be enabled automatically by package installation, discovery, CA metadata, or handshake messages.
 
