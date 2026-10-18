@@ -25,9 +25,15 @@ The router's Ed25519 key is bound to its X.509 client certificate; the RSA key i
 ## Router directory record (RDR)
 
 Every signed RDR payload contains:
+- `rdr_version` (currently `2`)
 - `router_id`
-- `ed25519_public_key` and `rsa_encryption_public_key` (PEM)
-- `wan_endpoints`, `gateway_ips`, and `prefixes` (operator-configured arrays)
+- `ed25519_public_key` (standard base64 of raw 32-byte Ed25519 key)
+- `ed25519_public_key_spki_der_b64` (base64 DER SubjectPublicKeyInfo deterministically derived from the raw key)
+- `certificate_der_b64` (base64 of the complete CA-issued X.509 certificate DER)
+- `originalIP` (canonical IPv6 address component of `wan_endpoints[0]`, excluding brackets and port)
+- `original_ip_usable` (Boolean; false means the record MUST NOT be used for a handshake)
+- `rsa_encryption_public_key` (PEM)
+- `wan_endpoints`, `gateway_ips`, and `prefixes` (operator-configured arrays; `wan_endpoints` order is significant and covered by the RDR signature)
 - `certificate_serial`
 - `status`: `ACTIVE`, `REVOKED`, `DISABLED`, `EXPIRED`, or `UNKNOWN`
 - monotonically increasing `record_seq`, `issued_at`, and `valid_until`
@@ -48,7 +54,7 @@ A `lookup` request contains `type="lookup"`, the authenticated caller's `router_
 - `nls-router-ca revoke-certificate SERIAL` remains available.
 - `nls-router-ca export-directory --output FILE` writes an offline signed bundle for operator transfer.
 
-Registration metadata is validated before persistence. Directory changes increment the global `directory_seq` and the router's `record_seq`. SQLite migration uses `schema_version` and guarded, repeatable column additions; the migration path is tested against the prior schema.
+Registration metadata is validated before persistence. The first endpoint MUST be bracketed IPv6 `[IPv6]:PORT`; port range is 1–65535, IPv6 zone identifiers are rejected, and unspecified, loopback, multicast, link-local, and IPv4-mapped addresses are rejected (ULA is allowed). Additional endpoints use the existing bracketed-IPv6 or IPv4 `IP:PORT` formats. The first endpoint determines `originalIP`; changing it changes `originalIP`. M1/M3 are sent to the peer's `originalIP` and the port parsed from its first endpoint. The `list-routers` command is read-only and reports router ID, endpoints, effective status, and original-IP usability. Directory changes increment the global `directory_seq` and the router's `record_seq`. SQLite migration uses `schema_version` and guarded, repeatable column additions; schema version 3 preserves legacy rows but marks records without a valid first endpoint unusable.
 
 ## Offline trust mode
 
