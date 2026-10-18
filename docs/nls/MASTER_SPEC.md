@@ -179,6 +179,8 @@ OPEN QUESTION: The first 128 digest bits are an arbitrary IPv6 address and may n
 
 ## Amendment: Minimal M1 disclosure and SourceToken data plane
 
+**Precedence for the SourceToken data plane:** This amendment's wire format and requirements supersede conflicting legacy NLE2 data-header descriptions elsewhere in this specification. The legacy NLE2 header is not an additional header in the SourceToken data path. NLH2 handshake framing remains separate.
+
 This amendment is normative and applies to the NLH2 handshake and its post-handshake data plane. It changes only the requirements explicitly listed below. It does not itself implement or validate the amended protocol.
 
 ### Scope and supersession
@@ -245,7 +247,7 @@ Encrypt exactly one 16-byte block under the derived AES-256 key. This operation 
 
 Attempts are uint32 big-endian values 0 through 255 inclusive. For each attempt, a candidate MUST be rejected and redrawn at the next attempt if it is invalid under the same selected, versioned address-policy mechanism used for vIP selection, equals this session's retired vIP, or equals either router's originalIP. If no candidate qualifies within attempts 0 through 255, the session MUST fail closed.
 
-The receiver precomputes expected inbound SourceTokens and performs an exact-match lookup on the outer IPv6 source address. A collision is scoped to the receiving router's local active/pending token table. A collision MUST NOT overwrite an existing entry; a detected local table collision fails the session closed. The token is constant for a direction during one session and changes when the session is rekeyed. Per-packet SourceToken variation is out of scope.
+The receiver precomputes expected inbound SourceTokens and performs an exact-match lookup on the outer IPv6 source address. A collision is scoped to the receiving router's local active/pending token table. A collision MUST NOT overwrite an existing entry; a detected local table collision fails the session closed. The SourceToken is constant for each direction throughout a session and changes when the session is rekeyed. It does not vary per packet; per-packet SourceToken variation is out of scope.
 
 #### B.3 Data payload, nonce and authentication
 
@@ -290,7 +292,7 @@ The effects of replacing the legacy header are:
 
 #### B.6 Security and operational limitations
 
-This SourceToken mechanism is not endpoint anonymity. In each direction, the actual destination router originalIP remains visible as the outer IPv6 destination. A per-direction SourceToken is stable within the session and can correlate packets from that session.
+This mechanism provides source-address confidentiality, not endpoint-identity anonymity or traffic-flow anonymity. See “Goals and non-goals of the SourceToken data plane (version 1)” for the observer model and explicit limitations. In each direction, the actual destination router originalIP remains visible as the outer IPv6 destination. A per-direction SourceToken is stable within the session and can correlate packets from that session.
 
 The sender must be able to emit UDP packets with the SourceToken as the outer IPv6 source. Implementations may require a temporary /128 address, raw sockets, or carefully scoped packet-manipulation rules; these must be removed at session termination. The implementation approach and cleanup tests are deferred to the applicable implementation workstream.
 
@@ -319,3 +321,39 @@ These are specification requirements, not a claim that tests have been implement
 1. Should specific encrypted data-plane message types be assigned for keepalive, close or other control operations now, or should no such types be emitted until a separate control-message specification is approved?
 2. Should the separate experimental NLSC control protocol (including its CLOSE frame type) remain independent, or should selected NLSC operations eventually be mapped to explicitly defined encrypted data-plane message types?
 3. The exact PMTU/ICMPv6 error strategy for the SourceToken source address and the handling of oversized or fragmented M1 messages still require lab validation.
+
+## Goals and non-goals of the SourceToken data plane (version 1)
+
+### Goals
+
+- **G1 — Source-address confidentiality:** In data-plane packets, the outer IPv6 source field MUST NOT contain a router's real address. It contains a SourceToken that only the two session endpoints can relate to the sender.
+- **G2 — Destination-only forwarding:** Intermediate routers forward using the outer destination address alone and need no knowledge of the SourceToken.
+- **G3 — Inner-packet confidentiality:** Inner IP addresses and the original packet payload are inside the AEAD ciphertext.
+
+### Non-goals for this version
+
+- **N1 — Communication-pattern hiding:** Each router's real address appears as the outer destination in one direction.
+- **N2 — Destination-router address hiding:** The destination router's address is not hidden.
+- **N3 — Within-session unlinkability:** The SourceToken is constant per direction for a session and can correlate packets in that session.
+- **N4 — UDP metadata hiding:** UDP ports, packet sizes, and timing remain observable.
+- **N5 — Sender-side observer protection:** This version does not protect against an observer at or adjacent to the sender, including link-layer observers, the first hop, or the upstream provider.
+- **N6 — Reply-destination hiding:** The reply's outer destination is the sender's real address so that the reply can be routed to it.
+
+### Observer model (informative)
+
+An observer that sees only A-to-B packets learns B's address, an opaque SourceToken, UDP ports, packet sizes, and timing. The observer does not learn A's address from the packet fields.
+
+An observer that sees both directions learns both routers' addresses.
+
+### Terminology rule
+
+Specification text, test names, and external descriptions MUST use "source-address confidentiality" for this version. They MUST NOT claim endpoint-identity anonymity or traffic-flow anonymity.
+
+### Future work (informative; not requirements)
+
+- Hide the reply destination using a routable-but-opaque return address, such as a per-session pseudo-address delegated to the sender's network, or a relay.
+- Vary the SourceToken per packet.
+- Define and validate MTU and ICMPv6 handling for the token source.
+
+**Status:** The SourceToken data plane is specified but not yet implemented; implementation is planned in Segment 7.
+
