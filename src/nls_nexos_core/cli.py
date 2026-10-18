@@ -16,7 +16,8 @@ from cryptography.x509.oid import NameOID
 from .config import Settings, token_from_environment_or_file
 from .control import NLSControlServer
 from .ca import CertificateAuthority
-from .database import Registry
+from .database import Registry, validate_wan_endpoints
+from .directory import record_for_router
 from .directory import signed_directory_bundle
 
 
@@ -87,21 +88,11 @@ def register(config_path: str, router_id: str, token: str,
              rsa_public_key_sha256: str = "", wan_endpoints=None, gateway_ips=None, prefixes=None):
     if len(token) < 32:
         raise SystemExit("Router enrollment token must be at least 32 characters")
-    for endpoint in wan_endpoints or []:
-        if endpoint.startswith("["):
-            if "]:" not in endpoint:
-                raise SystemExit("WAN IPv6 endpoint must use [address]:port")
-            host, port_text = endpoint[1:].rsplit("]:", 1)
-        else:
-            if endpoint.count(":") != 1:
-                raise SystemExit("WAN IPv4 endpoint must use address:port; bracket IPv6")
-            host, port_text = endpoint.rsplit(":", 1)
+    if wan_endpoints is not None:
         try:
-            ipaddress.ip_address(host)
-            if not 1 <= int(port_text) <= 65535:
-                raise ValueError
-        except (ValueError, TypeError):
-            raise SystemExit(f"Invalid WAN endpoint: {endpoint}")
+            validate_wan_endpoints(wan_endpoints)
+        except (ValueError, TypeError) as exc:
+            raise SystemExit(f"Invalid WAN endpoint metadata: {exc}") from exc
     try:
         for gateway in gateway_ips or []:
             ipaddress.ip_address(gateway)
@@ -160,6 +151,27 @@ def revoke_router(config_path: str, router_id: str):
     print(f"Revoked router and active certificates: {router_id}")
 
 
+def list_routers(config_path: str):
+    """Read-only listing of router endpoint/status/usability metadata."""
+    settings = Settings.load(config_path)
+    registry = Registry(settings.database_path)
+    rows = []
+    for router in registry.list_routers():
+        record = record_for_router(registry, router["router_id"])
+        try:
+            endpoints = json.loads(router.get("wan_endpoints") or "[]")
+            if not isinstance(endpoints, list):
+                endpoints = []
+        except (ValueError, TypeError):
+            endpoints = []
+        rows.append({
+            "router_id": router["router_id"],
+            "wan_endpoints": endpoints,
+            "status": record["status"] if record else "UNKNOWN",
+            "original_ip_usable": bool(record and record.get("original_ip_usable") is True),
+        })
+    print(json.dumps(rows, sort_keys=True, separators=(",", ":")))
+
 def export_directory(config_path: str, output_path: str):
     settings = Settings.load(config_path)
     registry = Registry(settings.database_path)
@@ -204,6 +216,7 @@ def main():
     register_parser.add_argument("--prefix", action="append", default=None)
     revoke_router_parser = subs.add_parser("revoke-router")
     revoke_router_parser.add_argument("router_id")
+    subs.add_parser("list-routers")
     export_parser = subs.add_parser("export-directory")
     export_parser.add_argument("--output", default="router-directory.bundle.json")
     revoke = subs.add_parser("revoke-certificate")
@@ -217,6 +230,8 @@ def main():
         revoke_certificate(args.config, args.serial_number)
     elif args.cmd == "revoke-router":
         revoke_router(args.config, args.router_id)
+    elif args.cmd == "list-routers":
+        list_routers(args.config)
     elif args.cmd == "export-directory":
         export_directory(args.config, args.output)
     else:
