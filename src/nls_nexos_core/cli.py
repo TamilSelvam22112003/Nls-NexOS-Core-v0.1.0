@@ -128,6 +128,44 @@ def register(config_path: str, router_id: str, token: str,
     print(f"Registered router: {router_id}")
 
 
+def update_router(config_path: str, router_id: str, wan_endpoints=None, gateway_ips=None, prefixes=None,
+                  rsa_public_key_sha256: str | None = None):
+    if not any(value is not None for value in (wan_endpoints, gateway_ips, prefixes, rsa_public_key_sha256)):
+        raise SystemExit("update-router requires at least one metadata option")
+    try:
+        for gateway in gateway_ips or []:
+            ipaddress.ip_address(gateway)
+        for prefix in prefixes or []:
+            ipaddress.ip_network(prefix, strict=False)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid gateway IP or prefix: {exc}") from exc
+    settings = Settings.load(config_path)
+    registry = Registry(settings.database_path)
+    try:
+        registry.set_directory_fields(
+            router_id, wan_endpoints=wan_endpoints, gateway_ips=gateway_ips, prefixes=prefixes,
+            expected_rsa_public_key_sha256=rsa_public_key_sha256,
+        )
+    except ValueError as exc:
+        registry.audit("ROUTER_UPDATE_DENIED", router_id, "invalid or conflicting metadata update", int(time.time()))
+        raise SystemExit(f"Router metadata update rejected: {exc}") from exc
+    registry.audit("ROUTER_UPDATED", router_id, "directory metadata updated by local administrator", int(time.time()))
+    print(f"Updated router metadata: {router_id}")
+
+
+def set_router_enabled(config_path: str, router_id: str, enabled: bool):
+    settings = Settings.load(config_path)
+    registry = Registry(settings.database_path)
+    now = int(time.time())
+    status = "ACTIVE" if enabled else "DISABLED"
+    if not registry.set_router_status(router_id, status, now):
+        registry.audit("ROUTER_STATUS_CHANGE_DENIED", router_id, "router missing, revoked, or already in requested state", now)
+        raise SystemExit("Router not found, revoked, or already in requested state")
+    registry.audit("ROUTER_ENABLED" if enabled else "ROUTER_DISABLED", router_id,
+                   "status changed by local administrator", now)
+    print(f"Router status set to {status}: {router_id}")
+
+
 def revoke_certificate(config_path: str, serial: str):
     settings = Settings.load(config_path)
     registry = Registry(settings.database_path)
@@ -170,6 +208,7 @@ def list_routers(config_path: str):
             "status": record["status"] if record else "UNKNOWN",
             "original_ip_usable": bool(record and record.get("original_ip_usable") is True),
         })
+    registry.audit("ROUTERS_LISTED", None, "read-only router metadata listing", int(time.time()))
     print(json.dumps(rows, sort_keys=True, separators=(",", ":")))
 
 def export_directory(config_path: str, output_path: str):
@@ -183,6 +222,7 @@ def export_directory(config_path: str, output_path: str):
     tmp.write_text(json.dumps(bundle, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
     os.chmod(tmp, 0o640)
     os.replace(tmp, target)
+    registry.audit("DIRECTORY_EXPORTED", None, "signed directory bundle exported", int(time.time()))
     print(f"Exported signed directory bundle: {target}")
 
 
@@ -216,6 +256,16 @@ def main():
     register_parser.add_argument("--prefix", action="append", default=None)
     revoke_router_parser = subs.add_parser("revoke-router")
     revoke_router_parser.add_argument("router_id")
+    update_parser = subs.add_parser("update-router")
+    update_parser.add_argument("router_id")
+    update_parser.add_argument("--wan-endpoint", action="append", default=None)
+    update_parser.add_argument("--gateway-ip", action="append", default=None)
+    update_parser.add_argument("--prefix", action="append", default=None)
+    update_parser.add_argument("--rsa-public-key-sha256", default=None)
+    disable_parser = subs.add_parser("disable-router")
+    disable_parser.add_argument("router_id")
+    enable_parser = subs.add_parser("enable-router")
+    enable_parser.add_argument("router_id")
     subs.add_parser("list-routers")
     export_parser = subs.add_parser("export-directory")
     export_parser.add_argument("--output", default="router-directory.bundle.json")
@@ -230,6 +280,18 @@ def main():
         revoke_certificate(args.config, args.serial_number)
     elif args.cmd == "revoke-router":
         revoke_router(args.config, args.router_id)
+    elif args.cmd == "update-router":
+        try:
+            if args.wan_endpoint is not None:
+                validate_wan_endpoints(args.wan_endpoint)
+        except (ValueError, TypeError) as exc:
+            raise SystemExit(f"Invalid WAN endpoint metadata: {exc}") from exc
+        update_router(args.config, args.router_id, args.wan_endpoint, args.gateway_ip, args.prefix,
+                      args.rsa_public_key_sha256)
+    elif args.cmd == "disable-router":
+        set_router_enabled(args.config, args.router_id, False)
+    elif args.cmd == "enable-router":
+        set_router_enabled(args.config, args.router_id, True)
     elif args.cmd == "list-routers":
         list_routers(args.config)
     elif args.cmd == "export-directory":
