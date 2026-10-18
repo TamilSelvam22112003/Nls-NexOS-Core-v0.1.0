@@ -112,7 +112,10 @@ def record_for_router(registry, router_id: str, now: int | None = None, validity
     except (ValueError, TypeError):
         identity_matches_certificate = False
 
-    original_ip_usable = bool(original_ip and identity_matches_certificate and router.get("original_ip_usable"))
+    original_ip_usable = bool(
+        original_ip and identity_matches_certificate and router.get("original_ip_usable")
+        and router.get("original_ip") == original_ip
+    )
     record_valid_until = now + min(max(int(validity_seconds), 1), 600)
     if status == "ACTIVE":
         record_valid_until = min(record_valid_until, not_after)
