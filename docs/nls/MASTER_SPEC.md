@@ -68,3 +68,52 @@ STEP C: LAB SCAFFOLD
 Reuse the style of tests/integration/test_four_node_nls.py. Build a reusable pytest fixture that creates a network-namespace lab: client, routerA, wan, routerB, server, ca (v6 addressing, veth pairs, forwarding on the WAN node). Add the full required test list as strict xfail tests, each with a docstring naming its requirement: valid handshake and end-to-end traffic; wrong certificate; revoked router; expired certificate; CA mismatch in S3; CA mismatch in S4; forged CA response; tampered ciphertext; replayed packet; out-of-window packet; replay-window poisoning (V7); data forgery (V8); vIP reuse after expiry; no vIP on the wire after the switch; SA downgrade; out-of-order handshake messages; spoofed garbage M1 cannot block a legitimate peer (V10); amplification bound; CA unreachable fails closed; rekey; routes not created from CA metadata (V11); logs contain no secrets; pcap proves inner IP packet and original source IP never appear in plaintext.
 
 GATE FOR PROMPT 1: verification table complete; docs written; lab fixture runs (existing tests still green); all new tests collected as strict xfail. Then STOP; do not start prompt 2.
+
+## Hybrid NLH2 amendment: CA-verified, time-bucketed vIP
+
+This amendment supersedes only conflicting statements above about the RDR fields, vIP derivation, M1 contents, and the outer IP header fields for M1-M4. The existing NLH2 message framing, sealed messages, signatures, transcript hashes, X25519/HKDF key schedule, AEAD data plane, fresh CA cross-checks, replay protections, endpoint-switch rules, and failure semantics remain the security base.
+
+### RDR primary WAN address
+
+Add `originalIP` to every Router Directory Record (RDR). It is the primary WAN endpoint and MUST equal the first entry of `wan_endpoints`. It MUST be a canonical IPv6 address. For cryptographic encoding, encode it as its 16-byte packed IPv6 representation, not as a textual string. An RDR with an absent, invalid, or inconsistent `originalIP` is invalid and MUST NOT be used for a handshake. The full certificate is the CA-issued X.509 certificate in DER encoding; public keys used in the vIP input are DER SubjectPublicKeyInfo encodings.
+
+### vIP derivation
+
+The source router S computes a per-handshake vIP before sending M1. M1 MUST contain a fresh cryptographically random 32-byte `vip_nonce` and a `time_bucket` equal to floor(Unix-time-seconds / 30). These fields are covered by the M1 signature and sealing. The time bucket is an unsigned 64-bit big-endian integer.
+
+Construct the vIP input as the following ordered sequence of fields:
+
+1. ASCII domain-separation label `NLS-vIP-v1`
+2. D.originalIP (16 packed IPv6 bytes)
+3. D certificate (complete DER certificate bytes)
+4. D Ed25519 public key (DER SubjectPublicKeyInfo bytes)
+5. S.originalIP (16 packed IPv6 bytes)
+6. S certificate (complete DER certificate bytes)
+7. S Ed25519 public key (DER SubjectPublicKeyInfo bytes)
+8. `vip_nonce` (32 bytes)
+9. `time_bucket` (8-byte unsigned big-endian integer)
+
+Encode EVERY field as `uint32_be(length) || field_bytes`, including the fixed-length fields and the domain label. Let `digest = SHA-512(encoded_fields)`. The candidate vIP is the IPv6 address represented by the first 16 bytes of `digest` (network byte order). Implementations MUST NOT use JSON, delimiter-concatenated text, platform-native integer encoding, or non-canonical certificate/key encodings for this calculation.
+
+D MUST recompute the candidate vIP using its own authoritative certificate/key and originalIP, plus S's certificate/key/originalIP obtained from a fresh, authenticated Router-CA lookup. D MUST compare the recomputed address with the M1 outer source address and reject a mismatch. D MUST accept a time bucket only if it is the current bucket or one adjacent bucket (absolute bucket difference <= 1), and MUST also enforce the independent M1 timestamp freshness, nonce replay protection, and handshake timeout. A time-bucket match does not replace the signature, transcript, certificate, status, or proof-of-possession checks.
+
+Because this requires S's full certificate before D sends M2, D performs an authenticated CA lookup for S after decrypting M1 and before replying. D still performs the mandatory fresh S lookup during S4/M3 processing; the early lookup is not a replacement for S4. If Router-CA is unreachable, the lookup is stale, or S's record is not ACTIVE, D fails closed and sends no successful M2 response.
+
+### M1 request and M1-M4 outer IP headers
+
+M1 MUST retain all existing NLH2 security fields and MUST additionally contain `request_for_peer_details: true`, the intended destination router ID, `vip_nonce`, and `time_bucket`. The explicit request asks D to return its CA-registered identity details in M2. It does not authorize D to trust S; S remains subject to D's S4 cross-check.
+
+The outer IP header rules for the bootstrap exchange are:
+
+- M1 (S to D): source = derived vIP; destination = D.originalIP.
+- M2 (D to S): source = D.originalIP; destination = derived vIP.
+- M3 (S to D): source = derived vIP; destination = D.originalIP.
+- M4 (D to S): source = D.originalIP; destination = derived vIP.
+
+M2 MUST carry D's certificate, public key, originalIP, and signed RDR, while retaining the existing DH key, SA proposal, nonce, transcript-hash, and signature fields required by NLH2. M3 MUST carry S's certificate, public key, originalIP, and signed RDR, while retaining the existing DH key, selected SA, transcript-hash, and signature fields. M4 remains the authenticated acknowledgement with transcript confirmation. Do not remove or weaken existing NLH2 fields to implement these additions.
+
+### vIP lifecycle and deployment constraint
+
+The derived vIP is temporary and is valid only for this handshake. It MUST be assigned/recognized as the outer source address for M1 and M3 and accepted as the outer destination for M2 and M4. On successful M4 verification, apply the existing endpoint-switch behavior: move the established session to the CA-validated real WAN endpoints and immediately retire the vIP; later packets using the vIP are rejected with `VIP_AFTER_SWITCH`. Failed handshakes must clean up temporary address and state.
+
+OPEN QUESTION: The first 128 digest bits are an arbitrary IPv6 address and may not be routable to S on a multi-hop or Internet WAN. Until an explicit deployment rule is approved, do not silently mask or rewrite digest bits to fit `vip.pool`, because doing so changes the specified derivation. Lab tests MUST establish whether the bootstrap network can deliver packets to/from this derived address. Production use over routed WANs requires a documented routing/encapsulation strategy that preserves the exact derivation and return-path reachability.
