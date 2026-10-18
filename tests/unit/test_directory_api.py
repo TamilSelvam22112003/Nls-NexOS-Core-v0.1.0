@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from nls_nexos_core.api import handle_control_request
 from nls_nexos_core.control import NLSControlServer
+from nls_nexos_core import cli
 from nls_nexos_core.database import Registry
 from nls_nexos_core.directory import verify_signature
 
@@ -176,3 +177,33 @@ def test_lookup_concurrency_cap_rejects_excess_parallel_requests(tmp_path, monke
     release.set()
     for worker in workers: worker.join(timeout=3)
     assert all(not worker.is_alive() for worker in workers)
+
+
+
+def test_admin_update_disable_enable_revoke_actions_are_audited_without_secrets(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin-actions.sqlite3"
+    registry = Registry(db_path)
+    now = int(time.time())
+    with registry.connect() as con:
+        con.execute(
+            "INSERT INTO routers(router_id,registered,status,created_at,updated_at) VALUES(?,1,'ACTIVE',?,?)",
+            ("router-admin", now, now),
+        )
+    monkeypatch.setattr(
+        cli.Settings, "load",
+        lambda _config_path: SimpleNamespace(database_path=db_path),
+    )
+    cli.update_router("unused.yaml", "router-admin", wan_endpoints=["[fd42:100::9]:4790"])
+    cli.set_router_enabled("unused.yaml", "router-admin", False)
+    cli.set_router_enabled("unused.yaml", "router-admin", True)
+    cli.revoke_router("unused.yaml", "router-admin")
+    with registry.connect() as con:
+        rows = con.execute("SELECT event,detail FROM audit_log ORDER BY id").fetchall()
+    events = [row["event"] for row in rows]
+    assert "ROUTER_UPDATED" in events
+    assert "ROUTER_DISABLED" in events
+    assert "ROUTER_ENABLED" in events
+    assert "ROUTER_REVOKED" in events
+    assert all("token=" not in row["detail"].lower()
+               and "private key" not in row["detail"].lower()
+               and "bootstrap secret" not in row["detail"].lower() for row in rows)
