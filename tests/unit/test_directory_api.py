@@ -189,6 +189,10 @@ def test_admin_update_disable_enable_revoke_actions_are_audited_without_secrets(
             "INSERT INTO routers(router_id,registered,status,created_at,updated_at) VALUES(?,1,'ACTIVE',?,?)",
             ("router-admin", now, now),
         )
+    registry.record_certificate(
+        "abc123", "router-admin", "2026-01-01T00:00:00+00:00",
+        "2027-01-01T00:00:00+00:00", "f" * 64, now,
+    )
     monkeypatch.setattr(
         cli.Settings, "load",
         lambda _config_path: SimpleNamespace(database_path=db_path),
@@ -196,6 +200,7 @@ def test_admin_update_disable_enable_revoke_actions_are_audited_without_secrets(
     cli.update_router("unused.yaml", "router-admin", wan_endpoints=["[fd42:100::9]:4790"])
     cli.set_router_enabled("unused.yaml", "router-admin", False)
     cli.set_router_enabled("unused.yaml", "router-admin", True)
+    cli.revoke_certificate("unused.yaml", "abc123")
     cli.revoke_router("unused.yaml", "router-admin")
     with registry.connect() as con:
         rows = con.execute("SELECT event,detail FROM audit_log ORDER BY id").fetchall()
@@ -203,6 +208,7 @@ def test_admin_update_disable_enable_revoke_actions_are_audited_without_secrets(
     assert "ROUTER_UPDATED" in events
     assert "ROUTER_DISABLED" in events
     assert "ROUTER_ENABLED" in events
+    assert "CERT_REVOKED" in events
     assert "ROUTER_REVOKED" in events
     assert all("token=" not in row["detail"].lower()
                and "private key" not in row["detail"].lower()
