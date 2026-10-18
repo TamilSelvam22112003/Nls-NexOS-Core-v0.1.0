@@ -33,7 +33,8 @@ def test_legacy_schema_migration_is_idempotent(tmp_path):
     assert router["record_seq"] == 1
     assert router["wan_endpoints"] == "[]"
     with db.connect() as migrated:
-        assert migrated.execute("SELECT version FROM schema_version").fetchone()[0] == 2
+        assert migrated.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+        assert router["original_ip_usable"] == 0
         columns = {row["name"] for row in migrated.execute("PRAGMA table_info(routers)")}
         assert {"ed25519_public_key", "rsa_encryption_public_key", "gateway_ips", "prefixes"} <= columns
 
@@ -69,3 +70,28 @@ def test_certificate_expiry_advances_record_and_directory_sequences(tmp_path):
     assert db.get_certificate("expired1")["status"] == "EXPIRED"
     assert db.get_router("router-expiry")["record_seq"] > before_record
     assert db.directory_seq() > before_seq
+
+
+def test_wan_endpoint_order_and_original_ip_validation(tmp_path):
+    import json
+    import pytest
+    db = Registry(tmp_path / "endpoints.sqlite3")
+    now = int(time.time())
+    with db.connect() as con:
+        con.execute(
+            "INSERT INTO routers(router_id,registered,status,created_at,updated_at) VALUES(?,1,'ACTIVE',?,?)",
+            ("edge-endpoints", now, now),
+        )
+    db.set_directory_fields("edge-endpoints", wan_endpoints=["[fd42:100::1]:4790", "192.0.2.8:4791"])
+    router = db.get_router("edge-endpoints")
+    assert router["original_ip_usable"] == 1
+    assert json.loads(router["wan_endpoints"]) == ["[fd42:100::1]:4790", "192.0.2.8:4791"]
+    for invalid in (
+        ["fd42:100::1:4790"], ["[::]:4790"], ["[::1]:4790"],
+        ["[ff02::1]:4790"], ["[fe80::1]:4790"], ["[::ffff:192.0.2.1]:4790"],
+        ["[fd42:100::1%eth0]:4790"], ["[fd42:100::1]:0"], ["[fd42:100::1]:65536"],
+        ["[fd42:100::1]:4790", "[fe80::1%eth0]:4791"],
+    ):
+        with pytest.raises(ValueError):
+            db.set_directory_fields("edge-endpoints", wan_endpoints=invalid)
+    assert json.loads(db.get_router("edge-endpoints")["wan_endpoints"]) == ["[fd42:100::1]:4790", "192.0.2.8:4791"]
