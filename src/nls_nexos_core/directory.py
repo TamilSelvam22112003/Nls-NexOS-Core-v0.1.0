@@ -8,8 +8,11 @@ from datetime import datetime, timezone
 
 import cbor2
 from cryptography.exceptions import InvalidSignature
+from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+
+from .database import original_ip_from_endpoints
 
 
 DOMAIN = b"NLS-DIR-v1"
@@ -42,7 +45,7 @@ def record_for_router(registry, router_id: str, now: int | None = None, validity
             "SELECT * FROM issued_certificates WHERE router_id=? ORDER BY created_at DESC LIMIT 1",
             (router_id,),
         ).fetchone()
-    status = router["status"]
+    router_status = router["status"]
     serial = None
     not_after = now
     if cert:
@@ -54,28 +57,75 @@ def record_for_router(registry, router_id: str, now: int | None = None, validity
             not_after = int(not_after_dt.timestamp())
         except (ValueError, TypeError):
             not_after = now
-        if cert["status"] == "REVOKED" or status == "REVOKED":
-            status = "REVOKED"
-        elif cert["status"] == "EXPIRED" or not_after <= now:
-            status = "EXPIRED"
-        elif status == "ACTIVE" and cert["status"] == "ACTIVE":
-            status = "ACTIVE"
-    elif status == "ACTIVE":
+        cert_status = cert["status"]
+    else:
+        cert_status = "EXPIRED"
+
+    # Explicit precedence: REVOKED > DISABLED > EXPIRED > ACTIVE.
+    if router_status == "REVOKED" or cert_status == "REVOKED":
+        status = "REVOKED"
+    elif router_status == "DISABLED":
+        status = "DISABLED"
+    elif cert_status == "EXPIRED" or not_after <= now or not cert:
         status = "EXPIRED"
+    elif router_status == "ACTIVE" and cert_status == "ACTIVE":
+        status = "ACTIVE"
+    else:
+        status = "DISABLED"
+
     def decode_list(name):
         try:
             value = json.loads(router.get(name) or "[]")
             return value if isinstance(value, list) else []
         except (ValueError, TypeError):
             return []
+
+    wan_endpoints = decode_list("wan_endpoints")
+    try:
+        original_ip = original_ip_from_endpoints(wan_endpoints)
+    except (ValueError, TypeError):
+        original_ip = None
+
+    spki_der_b64 = None
+    identity_matches_certificate = False
+    certificate_der_b64 = cert.get("certificate_der_b64") if cert else None
+    try:
+        raw_key = base64.b64decode(router.get("ed25519_public_key") or "", validate=True)
+        if len(raw_key) != 32:
+            raise ValueError("raw Ed25519 public key must be 32 bytes")
+        ed_key = Ed25519PublicKey.from_public_bytes(raw_key)
+        spki_der = ed_key.public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        spki_der_b64 = base64.b64encode(spki_der).decode("ascii")
+        cert_der = base64.b64decode(certificate_der_b64 or "", validate=True)
+        issued_cert = x509.load_der_x509_certificate(cert_der)
+        cert_key = issued_cert.public_key()
+        cert_raw = cert_key.public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        ) if isinstance(cert_key, Ed25519PublicKey) else b""
+        identity_matches_certificate = (
+            cert_raw == raw_key and
+            format(issued_cert.serial_number, "x").lower() ==
+            str(serial or "").lower().removeprefix("0x")
+        )
+    except (ValueError, TypeError):
+        identity_matches_certificate = False
+
+    original_ip_usable = bool(original_ip and identity_matches_certificate)
     record_valid_until = now + min(max(int(validity_seconds), 1), 600)
     if status == "ACTIVE":
         record_valid_until = min(record_valid_until, not_after)
     return {
+        "rdr_version": 2,
         "router_id": router_id,
         "ed25519_public_key": router.get("ed25519_public_key"),
+        "ed25519_public_key_spki_der_b64": spki_der_b64,
         "rsa_encryption_public_key": router.get("rsa_encryption_public_key"),
-        "wan_endpoints": decode_list("wan_endpoints"),
+        "certificate_der_b64": certificate_der_b64,
+        "originalIP": original_ip,
+        "original_ip_usable": original_ip_usable,
+        "wan_endpoints": wan_endpoints,
         "gateway_ips": decode_list("gateway_ips"),
         "prefixes": decode_list("prefixes"),
         "certificate_serial": serial,
