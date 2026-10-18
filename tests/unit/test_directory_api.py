@@ -116,8 +116,7 @@ def test_lookup_rejects_disabled_caller_even_if_transport_auth_was_cached(tmp_pa
     assert row and "token" not in row["detail"].lower() and "private" not in row["detail"].lower()
 
 
-def test_lookup_rate_limit_is_per_authenticated_router(tmp_path, monkeypatch):
-    import nls_nexos_core.control as control_module
+def test_lookup_rate_limit_is_per_authenticated_router(tmp_path):
     registry = Registry(tmp_path / "registry.sqlite3")
     _router(registry, "caller")
     key = ed25519.Ed25519PrivateKey.generate()
