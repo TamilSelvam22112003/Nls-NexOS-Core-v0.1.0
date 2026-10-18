@@ -51,6 +51,11 @@ def test_lookup_unknown_is_signed_and_nonce_bound(tmp_path):
     record = verify_signature(response["record"], pub)
     assert record["status"] == "UNKNOWN"
     assert record["client_nonce"] == nonce
+    with registry.connect() as con:
+        audit_rows = con.execute("SELECT event,detail FROM audit_log ORDER BY id").fetchall()
+    assert any(row["event"] == "DIRECTORY_LOOKUP" and "target=missing" in row["detail"] for row in audit_rows)
+    assert all("bootstrap" not in row["detail"].lower() and "private key" not in row["detail"].lower()
+               and "token=" not in row["detail"].lower() for row in audit_rows)
 
 
 def test_lookup_reports_revoked_and_expired_router_status(tmp_path):
