@@ -8,7 +8,7 @@ import base64
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric import padding, rsa, ed25519
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 
 from .database import Registry
@@ -158,6 +158,10 @@ class CertificateAuthority:
             .add_extension(x509.SubjectAlternativeName([x509.DNSName(req.router_id)]), critical=False)
             .sign(private_key=self.ca_key, algorithm=hashes.SHA256())
         )
+        if not isinstance(cert.public_key(), ed25519.Ed25519PublicKey):
+            raise EnrollmentDenied("router certificate identity key must be Ed25519")
+        ed_raw_b64 = rdr_ed25519_public_key_b64(cert.public_key())
+        cert_der_b64 = base64.b64encode(cert.public_bytes(serialization.Encoding.DER)).decode("ascii")
         pem = cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
         serial_hex = format(serial, "x")
         before_s, after_s = not_before.isoformat(), not_after.isoformat()
@@ -168,10 +172,13 @@ class CertificateAuthority:
         tmp.write_text(pem, encoding="ascii")
         tmp.chmod(0o640)
         tmp.replace(target)
-        self.registry.record_certificate(serial_hex, req.router_id, before_s, after_s, cert_digest, epoch)
+        self.registry.record_certificate(serial_hex, req.router_id, before_s, after_s, cert_digest, epoch, cert_der_b64)
         # RDR ed25519_public_key is the standard-base64 encoding of the raw 32-byte
         # Ed25519 public key consumed by NlsxNetOS. The X.509 certificate remains PEM.
-        ed_raw_b64 = rdr_ed25519_public_key_b64(csr.public_key())
+        if base64.b64decode(ed_raw_b64, validate=True) != cert.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        ):
+            raise RuntimeError("issued certificate and raw Ed25519 RDR key do not match")
         rsa_pem = rsa_public.public_bytes(
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
         ).decode("ascii")
