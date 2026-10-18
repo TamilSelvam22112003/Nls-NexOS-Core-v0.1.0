@@ -103,6 +103,7 @@ def test_router_enrolls_and_syncs_over_nls_control_v1(tmp_path):
                VALUES(?,1,'ACTIVE',?,?,?)""",
             ("edge-test", hashlib.sha256(router_token.encode()).hexdigest(), now, now),
         )
+    registry.set_directory_fields("edge-test", wan_endpoints=[f"[fd42:100::1]:{port}"])
     authority = CertificateAuthority(settings, registry, bootstrap_token)
     server = NLSControlServer(settings, registry, authority, server_identity)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
@@ -143,6 +144,10 @@ def test_router_enrolls_and_syncs_over_nls_control_v1(tmp_path):
             record = lookup(client_cfg, identity, "edge-test")
             assert record["router_id"] == "edge-test"
             assert record["status"] == "ACTIVE"
+            assert record["rdr_version"] == 2
+            assert record["originalIP"] == "fd42:100::1"
+            assert record["original_ip_usable"] is True
+            assert record["certificate_der_b64"]
             assert 0 < record["valid_until"] - int(time.time()) <= 30
             bundle = directory_sync(client_cfg, identity)
             assert bundle["directory_seq"] >= 1
