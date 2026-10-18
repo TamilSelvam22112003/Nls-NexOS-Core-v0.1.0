@@ -81,13 +81,36 @@ def handle_control_request(message: dict, authority, registry, settings,
             registry.audit("CONTROL_DENIED", router_id, "router identity mismatch", int(time.time()))
             return {"type": "error", "code": "not-authorized", "message": "router identity mismatch"}
         if action == "lookup":
+            # Defense in depth: caller must still be ACTIVE at lookup time,
+            # even if the transport authenticated it earlier in this session.
+            caller_router = registry.get_router(router_id)
+            caller_cert = registry.get_certificate(authenticated_router.get("serial_number", ""))
+            caller_active = bool(
+                caller_router and caller_router.get("registered")
+                and caller_router.get("status") == "ACTIVE"
+                and caller_cert and caller_cert.get("status") == "ACTIVE"
+                and caller_cert.get("router_id") == router_id
+            )
+            if caller_active:
+                try:
+                    now_dt = datetime.fromtimestamp(time.time(), timezone.utc)
+                    before = datetime.fromisoformat(caller_cert["not_before"].replace("Z", "+00:00"))
+                    after = datetime.fromisoformat(caller_cert["not_after"].replace("Z", "+00:00"))
+                    if before.tzinfo is None: before = before.replace(tzinfo=timezone.utc)
+                    if after.tzinfo is None: after = after.replace(tzinfo=timezone.utc)
+                    caller_active = before <= now_dt <= after
+                except (KeyError, ValueError, TypeError):
+                    caller_active = False
+            if not caller_active:
+                registry.audit("DIRECTORY_LOOKUP_DENIED", router_id, "caller router or certificate not active", int(time.time()))
+                return {"type": "error", "code": "not-authorized", "message": "directory access denied"}
             target = message.get("target_router_id")
             nonce = message.get("client_nonce")
             if not isinstance(target, str) or not 1 <= len(target) <= 128 or not isinstance(nonce, str) or not 16 <= len(nonce) <= 128:
                 registry.audit("DIRECTORY_LOOKUP_DENIED", router_id, "invalid lookup parameters", int(time.time()))
                 return {"type": "error", "code": "bad-request", "message": "invalid lookup request"}
-            record = signed_rdr(registry, target, control_identity_key, client_nonce=nonce) if control_identity_key else None
             registry.audit("DIRECTORY_LOOKUP", router_id, "target=" + target, int(time.time()))
+            record = signed_rdr(registry, target, control_identity_key, client_nonce=nonce) if control_identity_key else None
             if record is None:
                 from .directory import sign_payload
                 record = sign_payload({
