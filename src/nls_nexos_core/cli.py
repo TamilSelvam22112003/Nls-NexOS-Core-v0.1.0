@@ -93,6 +93,10 @@ def register(config_path: str, router_id: str, token: str,
     if len(token) < 32:
         registry.audit("ROUTER_REGISTER_DENIED", router_id, "enrollment token length rejected", now)
         raise SystemExit("Router enrollment token must be at least 32 characters")
+    existing_router = registry.get_router(router_id)
+    if existing_router and existing_router.get("status") == "REVOKED":
+        registry.audit("ROUTER_REGISTER_DENIED", router_id, "revoked router cannot be reactivated by registration", now)
+        raise SystemExit("Revoked routers cannot be reactivated by register-router")
     if wan_endpoints is not None:
         try:
             validate_wan_endpoints(wan_endpoints)
