@@ -81,6 +81,14 @@ Add `originalIP` to every Router Directory Record (RDR). It is the primary WAN e
 
 The source router S computes a per-handshake vIP before sending M1. M1 MUST contain a fresh cryptographically random 32-byte `vip_nonce` and a `time_bucket` equal to floor(Unix-time-seconds / 30). These fields are covered by the M1 signature and sealing. The time bucket is an unsigned 64-bit big-endian integer.
 
+#### Candidate validation and nonce redraw
+
+S MUST derive a candidate vIP using the exact SHA-512 input encoding specified below. If the candidate is not valid under the address policy version selected for the handshake, S MUST discard it, generate a new cryptographically random 32-byte `vip_nonce`, and recompute the candidate with the same time bucket and all other inputs unchanged. S MUST repeat until the candidate passes policy validation. Every redraw MUST use a fresh nonce; a nonce used for a rejected candidate MUST NOT be reused.
+
+The derivation formula and field encoding MUST remain unchanged. An implementation MUST NOT mask, prefix, or otherwise rewrite digest bits to make a candidate pass address policy.
+
+D MUST independently validate the received/recomputed candidate under the same policy version and MUST reject a candidate that fails policy, even if its hash calculation otherwise matches.
+
 Construct the vIP input as the following ordered sequence of fields:
 
 1. ASCII domain-separation label `NLS-vIP-v1`
@@ -97,11 +105,17 @@ Encode EVERY field as `uint32_be(length) || field_bytes`, including the fixed-le
 
 D MUST recompute the candidate vIP using its own authoritative certificate/key and originalIP, plus S's certificate/key/originalIP obtained from a fresh, authenticated Router-CA lookup. D MUST compare the recomputed address with the M1 outer source address and reject a mismatch. D MUST accept a time bucket only if it is the current bucket or one adjacent bucket (absolute bucket difference <= 1), and MUST also enforce the independent M1 timestamp freshness, nonce replay protection, and handshake timeout. A time-bucket match does not replace the signature, transcript, certificate, status, or proof-of-possession checks.
 
-Because this requires S's full certificate before D sends M2, D performs an authenticated CA lookup for S after decrypting M1 and before replying. D still performs the mandatory fresh S lookup during S4/M3 processing; the early lookup is not a replacement for S4. If Router-CA is unreachable, the lookup is stale, or S's record is not ACTIVE, D fails closed and sends no successful M2 response.
+Because this requires S's full certificate before D sends M2, D performs an authenticated CA lookup for S after decrypting M1 and before replying. Before any RSA decryption of M1, D MUST enforce a global pending-handshake cap; if the cap is reached, D MUST reject or drop the datagram without decrypting it or allocating pending state. D MUST also apply a global token bucket, per-ingress-interface rate limits, and per-outer-source-/64 rate limits before RSA decryption. The outer source is a per-handshake vIP and is not a stable router identity, so these limits MUST be applied as independent resource controls and MUST NOT be replaced by claimed-identity limits.
+
+After decryption and bounded schema parsing, the claimed router ID MAY be used only as a secondary rate-limit key; it MUST NOT replace the global, ingress-interface, or source-/64 controls. Before starting the CA lookup, D MUST enforce strict datagram-size and NLH2 framing limits, validate message type, lengths, required fields, field types, and schema constraints, and reject malformed input. Where a cached RDR for the claimed source router exists, D MUST verify the M1 signature against that cached identity and compare claimed identity keys to the cached record. A known mismatch, revoked/disabled status, or invalid cached record MUST be rejected before lookup. An absent cache entry does not establish trust; it may proceed only through the bounded, fail-closed path. D MUST cap concurrent pending CA lookups as well as pending handshakes.
+
+An optional stateless retry cookie MAY be enabled as an additional load-shedding measure. It MUST be validated before allocating expensive handshake state or initiating a CA lookup, and MUST NOT replace the mandatory authentication and CA checks.
+
+D still performs the mandatory fresh S lookup during S4/M3 processing; the early lookup is not a replacement for S4. If Router-CA is unreachable, the lookup is stale, or S's record is not ACTIVE, D fails closed and sends no successful M2 response.
 
 ### M1 request and M1-M4 outer IP headers
 
-M1 MUST retain all existing NLH2 security fields and MUST additionally contain `request_for_peer_details: true`, the intended destination router ID, `vip_nonce`, and `time_bucket`. The explicit request asks D to return its CA-registered identity details in M2. It does not authorize D to trust S; S remains subject to D's S4 cross-check.
+M1 MUST retain all existing NLH2 security fields and MUST additionally contain `request_for_peer_details: true`, the intended destination router ID, `vip_nonce`, `time_bucket`, and `vip_policy_version`. `vip_policy_version` is an unsigned integer identifying the versioned IPv6 address-classification policy; version 1 is defined below. The nonce, time bucket, policy version, and request fields MUST be covered by the M1 signature and sealing. D MUST reject an unknown or unsupported policy version before the pre-M2 CA lookup. The explicit request asks D to return its CA-registered identity details in M2. It does not authorize D to trust S; S remains subject to D's S4 cross-check.
 
 The outer IP header rules for the bootstrap exchange are:
 
@@ -116,4 +130,23 @@ M2 MUST carry D's certificate, public key, originalIP, and signed RDR, while ret
 
 The derived vIP is temporary and is valid only for this handshake. It MUST be assigned/recognized as the outer source address for M1 and M3 and accepted as the outer destination for M2 and M4. On successful M4 verification, apply the existing endpoint-switch behavior: move the established session to the CA-validated real WAN endpoints and immediately retire the vIP; later packets using the vIP are rejected with `VIP_AFTER_SWITCH`. Failed handshakes must clean up temporary address and state.
 
-OPEN QUESTION: The first 128 digest bits are an arbitrary IPv6 address and may not be routable to S on a multi-hop or Internet WAN. Until an explicit deployment rule is approved, do not silently mask or rewrite digest bits to fit `vip.pool`, because doing so changes the specified derivation. Lab tests MUST establish whether the bootstrap network can deliver packets to/from this derived address. Production use over routed WANs requires a documented routing/encapsulation strategy that preserves the exact derivation and return-path reachability.
+#### Versioned vIP address policy
+
+`vip_policy_version = 1` requires the candidate IPv6 address to lie within IPv6 Global Unicast space `2000::/3` and not fall within any excluded range in this policy. Policy v1 MUST exclude at least:
+- `2001:db8::/32` (documentation);
+- `2001::/23` (IETF protocol assignments and special-purpose space);
+- `2001::/32` (Teredo);
+- `2001:2::/48` (benchmarking);
+- `2001:10::/28` and `2001:20::/28` (ORCHID / ORCHIDv2);
+- `2002::/16` (6to4);
+- `3fff::/20` (documentation).
+
+Policy v1 MUST additionally exclude every IPv6 special-purpose range listed in the IANA IPv6 Special-Purpose Address Registry unless that entry is explicitly designated globally reachable and approved for this purpose. The implementation MUST pin a dated/versioned snapshot of that registry as part of its policy-v1 definition; it MUST NOT silently change classification when the host's registry data changes. The exclusion list and registry snapshot identifier MUST be documented and identical on S and D. Add boundary tests for the start, end, and adjacent addresses of `2000::/3` and every exclusion range, including each registry-derived exclusion. Tests MUST also cover accepted addresses immediately outside excluded ranges and rejection of unknown `vip_policy_version` values. The version is part of M1's signed and sealed fields, and D MUST reject unknown versions.
+
+#### Lab-only temporary route
+
+LAB ONLY: after D has successfully verified M1, recomputed the vIP, validated its address class and policy version, verified the applicable signature and cached-record checks, and completed the required fresh authenticated CA lookup, D MUST install a temporary IPv6 /128 route for the derived vIP via S.originalIP when needed for the controlled lab topology. This route is temporary handshake state, MUST NOT be installed from unverified M1 fields, and MUST NOT be created from CA directory metadata alone.
+
+D MUST remove this route on successful handshake completion, handshake failure, or handshake timeout. Cleanup MUST also run when the pending handshake is cancelled or its state is discarded. Removal MUST be scoped to the exact route installed for that handshake and MUST NOT delete or overwrite an operator-managed route. Route installation failure MUST fail the lab handshake closed and MUST NOT leave partially allocated vIP or handshake state. This /128-via-S.originalIP behavior is strictly for lab testing and MUST NOT be treated as the production routing solution or enabled implicitly in production deployments.
+
+OPEN QUESTION: The first 128 digest bits are an arbitrary IPv6 address and may not be routable to S on a multi-hop or Internet WAN. Do not silently mask or rewrite digest bits to fit `vip.pool`, because doing so changes the specified derivation. Lab tests MUST establish whether the lab-only temporary route provides the required bootstrap reachability in the controlled topology. Production use over routed WANs requires a separately documented routing/encapsulation strategy that preserves the exact derivation and return-path reachability. Spoofed global-unicast source addresses are expected to be dropped by ingress filtering (BCP 38 / uRPF) on production networks.
