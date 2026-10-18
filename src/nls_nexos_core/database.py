@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS routers(
  router_id TEXT PRIMARY KEY,
  registered INTEGER NOT NULL DEFAULT 0 CHECK(registered IN (0,1)),
  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','REVOKED','DISABLED')),
+ original_ip TEXT UNIQUE,
  expected_public_key_sha256 TEXT, allowed_ipv6 TEXT, allowed_mac TEXT,
  enrollment_token_sha256 TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
@@ -45,6 +46,7 @@ _ROUTER_MIGRATIONS = {
  "prefixes": "TEXT NOT NULL DEFAULT '[]'",
  "record_seq": "INTEGER NOT NULL DEFAULT 1",
  "original_ip_usable": "INTEGER NOT NULL DEFAULT 0 CHECK(original_ip_usable IN (0,1))",
+ "original_ip": "TEXT",
 }
 
 def _parse_ip_port(endpoint, *, require_bracketed_ipv6=False, reject_special_ipv6=False):
@@ -123,19 +125,23 @@ class Registry:
     con.execute("ALTER TABLE issued_certificates ADD COLUMN certificate_der_b64 TEXT")
    version_row=con.execute("SELECT version FROM schema_version WHERE singleton=1").fetchone()
    old_version=int(version_row[0]) if version_row else 1
-   if old_version < 3:
-    # Preserve legacy rows; invalid or absent first endpoints remain unusable.
-    for row in con.execute("SELECT router_id,wan_endpoints FROM routers").fetchall():
+   if old_version < 4:
+    # Preserve legacy rows. Invalid and duplicate originalIP claims remain in the
+    # registry but are marked unusable; deterministic ordering resolves old duplicates.
+    seen=set()
+    for row in con.execute("SELECT router_id,wan_endpoints FROM routers ORDER BY router_id").fetchall():
      try:
       endpoints=json.loads(row["wan_endpoints"] or "[]")
-      usable=original_ip_from_endpoints(endpoints) is not None
-      if usable: validate_wan_endpoints(endpoints)
+      original_ip=validate_wan_endpoints(endpoints)
+      usable=original_ip is not None and original_ip not in seen
      except (ValueError,TypeError,json.JSONDecodeError):
-      usable=False
-     con.execute("UPDATE routers SET original_ip_usable=? WHERE router_id=?",
-                 (1 if usable else 0,row["router_id"]))
-   # Version 3 adds signed RDR identity/address fields and the DER certificate.
-   con.execute("UPDATE schema_version SET version=3 WHERE singleton=1")
+      original_ip=None; usable=False
+     if usable: seen.add(original_ip)
+     con.execute("UPDATE routers SET original_ip=?,original_ip_usable=? WHERE router_id=?",
+                 (original_ip if usable else None,1 if usable else 0,row["router_id"]))
+   # Enforce uniqueness only for usable records; unusable legacy rows are retained.
+   con.execute("CREATE UNIQUE INDEX IF NOT EXISTS routers_original_ip_unique ON routers(original_ip) WHERE original_ip IS NOT NULL AND original_ip_usable=1")
+   con.execute("UPDATE schema_version SET version=4 WHERE singleton=1")
   try: self.path.chmod(0o640)
   except OSError: pass
 
@@ -161,10 +167,12 @@ class Registry:
 
  def set_directory_fields(self, router_id, *, wan_endpoints=None, gateway_ips=None, prefixes=None,
                           expected_rsa_public_key_sha256=None):
+  endpoint_original_ip = None
   endpoint_usable = None
   if wan_endpoints is not None:
    try:
-    endpoint_usable = validate_wan_endpoints(wan_endpoints) is not None
+    endpoint_original_ip = validate_wan_endpoints(wan_endpoints)
+    endpoint_usable = endpoint_original_ip is not None
    except (ValueError,TypeError) as exc:
     raise ValueError(f"invalid WAN endpoint metadata: {exc}") from exc
   with self.connect() as con:
@@ -175,12 +183,18 @@ class Registry:
     if value is not None: fields[name]=json.dumps(value,separators=(",",":"),sort_keys=True)
    if endpoint_usable is not None:
     fields["original_ip_usable"]=1 if endpoint_usable else 0
+    fields["original_ip"]=endpoint_original_ip
    if expected_rsa_public_key_sha256 is not None:
     fields["expected_rsa_public_key_sha256"]=expected_rsa_public_key_sha256.lower() or None
    if fields:
     assignments=", ".join(f"{name}=?" for name in fields)
-    con.execute(f"UPDATE routers SET {assignments},updated_at=? WHERE router_id=?",
-                (*fields.values(),int(__import__("time").time()),router_id))
+    try:
+     con.execute(f"UPDATE routers SET {assignments},updated_at=? WHERE router_id=?",
+                 (*fields.values(),int(__import__("time").time()),router_id))
+    except sqlite3.IntegrityError as exc:
+     if "UNIQUE constraint failed: routers.original_ip" in str(exc):
+      raise ValueError("originalIP must be unique across usable routers") from exc
+     raise
     con.execute("UPDATE routers SET record_seq=record_seq+1 WHERE router_id=?",(router_id,))
     con.execute("UPDATE directory_meta SET directory_seq=directory_seq+1 WHERE singleton=1")
 
@@ -237,6 +251,19 @@ class Registry:
     con.execute("UPDATE routers SET record_seq=record_seq+1,updated_at=? WHERE router_id=?",(int(now),router_id))
     con.execute("UPDATE directory_meta SET directory_seq=directory_seq+1 WHERE singleton=1")
   return len(expired)
+
+ def set_router_status(self, router_id, status, now):
+  if status not in ("ACTIVE", "DISABLED"):
+   raise ValueError("admin status transition must be ACTIVE or DISABLED")
+  with self.connect() as con:
+   row=con.execute("SELECT status FROM routers WHERE router_id=?",(router_id,)).fetchone()
+   if not row or row["status"] == "REVOKED" or row["status"] == status:
+    return False
+   cur=con.execute("UPDATE routers SET status=?,record_seq=record_seq+1,updated_at=? WHERE router_id=? AND status!='REVOKED'",
+                   (status,int(now),router_id))
+   if cur.rowcount:
+    con.execute("UPDATE directory_meta SET directory_seq=directory_seq+1 WHERE singleton=1")
+   return cur.rowcount == 1
 
  def revoke_certificate(self, serial, now):
   with self.connect() as con:
