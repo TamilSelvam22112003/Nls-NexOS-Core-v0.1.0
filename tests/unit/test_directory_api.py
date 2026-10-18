@@ -213,3 +213,28 @@ def test_admin_update_disable_enable_revoke_actions_are_audited_without_secrets(
     assert all("token=" not in row["detail"].lower()
                and "private key" not in row["detail"].lower()
                and "bootstrap secret" not in row["detail"].lower() for row in rows)
+
+
+
+def test_register_cannot_reactivate_revoked_router(tmp_path, monkeypatch):
+    import pytest
+    db_path = tmp_path / "revoked-router.sqlite3"
+    registry = Registry(db_path)
+    now = int(time.time())
+    with registry.connect() as con:
+        con.execute(
+            "INSERT INTO routers(router_id,registered,status,created_at,updated_at) VALUES(?,1,'REVOKED',?,?)",
+            ("router-revoked", now, now),
+        )
+    monkeypatch.setattr(
+        cli.Settings, "load",
+        lambda _config_path: SimpleNamespace(database_path=db_path),
+    )
+    with pytest.raises(SystemExit, match="Revoked routers cannot be reactivated"):
+        cli.register("unused.yaml", "router-revoked", "t" * 40)
+    assert registry.get_router("router-revoked")["status"] == "REVOKED"
+    with registry.connect() as con:
+        row = con.execute(
+            "SELECT event,detail FROM audit_log WHERE event='ROUTER_REGISTER_DENIED'"
+        ).fetchone()
+    assert row and "reactivated" in row["detail"]
