@@ -141,12 +141,47 @@ The derived vIP is temporary and is valid only for this handshake. It MUST be as
 - `2002::/16` (6to4);
 - `3fff::/20` (documentation).
 
-Policy v1 MUST additionally exclude every IPv6 special-purpose range listed in the IANA IPv6 Special-Purpose Address Registry unless that entry is explicitly designated globally reachable and approved for this purpose. The implementation MUST pin a dated/versioned snapshot of that registry as part of its policy-v1 definition; it MUST NOT silently change classification when the host's registry data changes. The exclusion list and registry snapshot identifier MUST be documented and identical on S and D. Add boundary tests for the start, end, and adjacent addresses of `2000::/3` and every exclusion range, including each registry-derived exclusion. Tests MUST also cover accepted addresses immediately outside excluded ranges and rejection of unknown `vip_policy_version` values. The version is part of M1's signed and sealed fields, and D MUST reject unknown versions.
+#### Policy-v1 pinned registry snapshot
+
+Policy v1 approves **no** IANA special-purpose prefix for vIP use. Therefore, every IPv6 Special-Purpose Address Registry entry whose prefix intersects `2000::/3` is excluded, including entries whose registry metadata says globally reachable; globally reachable status alone is not approval for this protocol. The table below is the literal policy-v1 exclusion table derived from the IANA IPv6 Special-Purpose Address Space registry.
+
+- Registry: https://www.iana.org/assignments/iana-ipv6-special-registry
+- Registry's recorded **Last Updated** date: `2025-10-09`
+- Snapshot captured for this specification: `2026-10-18`
+- Table serialization for hashing: the CIDR prefixes below, one per line in the exact order shown, ASCII lowercase, LF line endings, including one final LF, with no whitespace or comments.
+- SHA-256 of that exact serialized table: `ce96b8ce001ceeeff4c0c1c5682a514c0dd831969481e3e73583999a3320288c`
+
+| Literal exclusion prefix | Registry designation |
+|---|---|
+| `2001::/23` | IETF Protocol Assignments |
+| `2001::/32` | TEREDO |
+| `2001:1::1/128` | Port Control Protocol Anycast |
+| `2001:1::2/128` | Traversal Using Relays around NAT Anycast |
+| `2001:1::3/128` | DNS-SD Service Registration Protocol Anycast |
+| `2001:2::/48` | Benchmarking |
+| `2001:3::/32` | AMT |
+| `2001:4:112::/48` | AS112-v6 |
+| `2001:10::/28` | Deprecated (previously ORCHID) |
+| `2001:20::/28` | ORCHIDv2 |
+| `2001:30::/28` | Drone Remote ID Protocol Entity Tags (DETs) Prefix |
+| `2001:db8::/32` | Documentation |
+| `2002::/16` | 6to4 |
+| `2620:4f:8000::/48` | Direct Delegation AS112 Service |
+| `3fff::/20` | Documentation |
+| `5f00::/16` | Segment Routing (SRv6) SIDs |
+
+Implementations MUST embed this exact literal table and MUST NOT read, download, or otherwise consult the host's IANA registry data at runtime. S and D MUST use the same pinned table and hash. A future table change requires a new `vip_policy_version`, a new table hash, and explicit protocol-specification change; implementations MUST reject unknown versions. The `2000::/3` inclusion check remains mandatory in addition to this exclusion table.
+
+Add boundary tests for the start, end, and adjacent addresses of `2000::/3` and every table prefix. Tests MUST cover accepted addresses immediately outside excluded ranges where those addresses remain inside `2000::/3`, rejection of addresses in every exclusion (including nested/overlapping entries), and rejection of unknown `vip_policy_version` values. The version is part of M1's signed and sealed fields.
 
 #### Lab-only temporary route
 
-LAB ONLY: after D has successfully verified M1, recomputed the vIP, validated its address class and policy version, verified the applicable signature and cached-record checks, and completed the required fresh authenticated CA lookup, D MUST install a temporary IPv6 /128 route for the derived vIP via S.originalIP when needed for the controlled lab topology. This route is temporary handshake state, MUST NOT be installed from unverified M1 fields, and MUST NOT be created from CA directory metadata alone.
+#### Explicit lab-route configuration switch
 
-D MUST remove this route on successful handshake completion, handshake failure, or handshake timeout. Cleanup MUST also run when the pending handshake is cancelled or its state is discarded. Removal MUST be scoped to the exact route installed for that handshake and MUST NOT delete or overwrite an operator-managed route. Route installation failure MUST fail the lab handshake closed and MUST NOT leave partially allocated vIP or handshake state. This /128-via-S.originalIP behavior is strictly for lab testing and MUST NOT be treated as the production routing solution or enabled implicitly in production deployments.
+The lab-only temporary route is controlled by the configuration key `vip.lab_temporary_route.enabled`, a Boolean whose default MUST be `false`. If the key is absent, invalid, or false, D MUST NOT install this route. Enabling it MUST require an explicit operator configuration in a controlled lab deployment; production configurations MUST leave it disabled, and a production-mode configuration MUST reject an attempt to enable it. This switch MUST NOT be enabled automatically by package installation, discovery, CA metadata, or handshake messages.
+
+When and only when `vip.lab_temporary_route.enabled = true` in lab mode, after D has successfully verified M1, recomputed the vIP, validated its address class and policy version, verified the applicable signature and cached-record checks, and completed the required fresh authenticated CA lookup, D MAY install a temporary IPv6 /128 route for the derived vIP via S.originalIP when needed for the controlled lab topology. This route is temporary handshake state, MUST NOT be installed from unverified M1 fields, and MUST NOT be created from CA directory metadata alone.
+
+If installed, D MUST remove this route on successful handshake completion, handshake failure, or handshake timeout. Cleanup MUST also run when the pending handshake is cancelled or its state is discarded. Removal MUST be scoped to the exact route installed for that handshake and MUST NOT delete or overwrite an operator-managed route. Route installation failure MUST fail the lab handshake closed and MUST NOT leave partially allocated vIP or handshake state. This /128-via-S.originalIP behavior is strictly for lab testing and MUST NOT be treated as the production routing solution.
 
 OPEN QUESTION: The first 128 digest bits are an arbitrary IPv6 address and may not be routable to S on a multi-hop or Internet WAN. Do not silently mask or rewrite digest bits to fit `vip.pool`, because doing so changes the specified derivation. Lab tests MUST establish whether the lab-only temporary route provides the required bootstrap reachability in the controlled topology. Production use over routed WANs requires a separately documented routing/encapsulation strategy that preserves the exact derivation and return-path reachability. Spoofed global-unicast source addresses are expected to be dropped by ingress filtering (BCP 38 / uRPF) on production networks.
