@@ -117,3 +117,14 @@ def test_invalid_original_ip_endpoint_is_retained_but_unusable(tmp_path):
     record = record_for_router(db, "edge-rdr")
     assert record["originalIP"] is None
     assert record["original_ip_usable"] is False
+
+
+
+def test_rdr_marks_endpoint_column_mismatch_unusable(tmp_path):
+    db = _registered_router(tmp_path)
+    with db.connect() as con:
+        con.execute("UPDATE routers SET original_ip=? WHERE router_id=?",
+                    ("fd42:100::99", "edge-rdr"))
+    record = record_for_router(db, "edge-rdr")
+    assert record["originalIP"] == "fd42:100::1"
+    assert record["original_ip_usable"] is False
