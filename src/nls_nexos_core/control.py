@@ -31,6 +31,11 @@ class NLSControlServer:
         self._nonce_lock = threading.Lock()
         self._lookup_times: dict[str, list[float]] = {}
         self._lookup_lock = threading.Lock()
+        self._active_lookup_counts: dict[str, int] = {}
+        self._active_lookup_total = 0
+        self._lookup_concurrency_lock = threading.Lock()
+        self.max_concurrent_lookups_per_router = 4
+        self.max_concurrent_lookups_total = 64
         self._stopping = threading.Event()
 
     def _fresh_nonce(self, nonce: str) -> bool:
@@ -105,6 +110,7 @@ class NLSControlServer:
 
     def _dispatch(self, message: dict, auth: dict | None) -> dict:
         action = message.get("type") if isinstance(message, dict) else None
+        reserved_lookup_router = None
         if action in ("lookup", "directory-sync"):
             if not auth:
                 self.registry.audit("DIRECTORY_LOOKUP_DENIED", None, "missing active client certificate", int(time.time()))
@@ -139,14 +145,34 @@ class NLSControlServer:
                     return {"type": "error", "code": "rate-limited", "message": "directory request rate limit exceeded"}
                 recent.append(now)
                 self._lookup_times[router_id] = recent
-        return handle_control_request(
-            message=message,
-            authority=self.authority,
-            registry=self.registry,
-            settings=self.settings,
-            authenticated_router=auth,
-            control_identity_key=self.control_identity_key,
-        )
+            if action == "lookup":
+                with self._lookup_concurrency_lock:
+                    active_for_router = self._active_lookup_counts.get(router_id, 0)
+                    if (active_for_router >= self.max_concurrent_lookups_per_router
+                            or self._active_lookup_total >= self.max_concurrent_lookups_total):
+                        self.registry.audit("DIRECTORY_LOOKUP_DENIED", router_id, "concurrent lookup cap exceeded", int(time.time()))
+                        return {"type": "error", "code": "rate-limited", "message": "directory concurrency limit exceeded"}
+                    self._active_lookup_counts[router_id] = active_for_router + 1
+                    self._active_lookup_total += 1
+                    reserved_lookup_router = router_id
+        try:
+            return handle_control_request(
+                message=message,
+                authority=self.authority,
+                registry=self.registry,
+                settings=self.settings,
+                authenticated_router=auth,
+                control_identity_key=self.control_identity_key,
+            )
+        finally:
+            if reserved_lookup_router is not None:
+                with self._lookup_concurrency_lock:
+                    count = self._active_lookup_counts.get(reserved_lookup_router, 0) - 1
+                    if count > 0:
+                        self._active_lookup_counts[reserved_lookup_router] = count
+                    else:
+                        self._active_lookup_counts.pop(reserved_lookup_router, None)
+                    self._active_lookup_total -= 1
 
     def _handle_client(self, conn: socket.socket, address) -> None:
         channel = None
