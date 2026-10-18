@@ -1,6 +1,7 @@
 """SQLite registry with idempotent, versioned schema migrations."""
 import sqlite3
 import json
+import ipaddress
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -17,7 +18,8 @@ CREATE TABLE IF NOT EXISTS issued_certificates(
  serial_number TEXT PRIMARY KEY, router_id TEXT NOT NULL REFERENCES routers(router_id),
  not_before TEXT NOT NULL, not_after TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','REVOKED','EXPIRED')),
- cert_sha256 TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER
+ cert_sha256 TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER,
+ certificate_der_b64 TEXT
 );
 CREATE INDEX IF NOT EXISTS issued_router_idx ON issued_certificates(router_id);
 CREATE TABLE IF NOT EXISTS enrollment_requests(
@@ -42,7 +44,56 @@ _ROUTER_MIGRATIONS = {
  "gateway_ips": "TEXT NOT NULL DEFAULT '[]'",
  "prefixes": "TEXT NOT NULL DEFAULT '[]'",
  "record_seq": "INTEGER NOT NULL DEFAULT 1",
+ "original_ip_usable": "INTEGER NOT NULL DEFAULT 0 CHECK(original_ip_usable IN (0,1))",
 }
+
+def _parse_ip_port(endpoint, *, require_bracketed_ipv6=False, reject_special_ipv6=False):
+ if not isinstance(endpoint, str) or not endpoint or "%" in endpoint:
+  raise ValueError("invalid WAN endpoint or IPv6 zone identifier")
+ if endpoint.startswith("["):
+  if "]:" not in endpoint:
+   raise ValueError("WAN IPv6 endpoint must use [address]:port")
+  host, port_text = endpoint[1:].rsplit("]:", 1)
+  if not host or "[" in host or "]" in host:
+   raise ValueError("invalid bracketed IPv6 endpoint")
+  address = ipaddress.IPv6Address(host)
+ else:
+  if require_bracketed_ipv6:
+   raise ValueError("first WAN endpoint must use bracketed IPv6 [address]:port")
+  if endpoint.count(":") != 1:
+   raise ValueError("WAN IPv4 endpoint must use address:port; bracket IPv6")
+  host, port_text = endpoint.rsplit(":", 1)
+  address = ipaddress.ip_address(host)
+ if not port_text.isascii() or not port_text.isdecimal():
+  raise ValueError("WAN endpoint port must be an integer")
+ port = int(port_text)
+ if not 1 <= port <= 65535:
+  raise ValueError("WAN endpoint port must be between 1 and 65535")
+ if require_bracketed_ipv6 and not isinstance(address, ipaddress.IPv6Address):
+  raise ValueError("first WAN endpoint must be IPv6")
+ if reject_special_ipv6 and (address.is_unspecified or address.is_loopback or address.is_multicast or address.is_link_local or address.ipv4_mapped is not None):
+  raise ValueError("first WAN endpoint uses a forbidden IPv6 address class")
+ return address, port
+
+
+def original_ip_from_endpoints(wan_endpoints):
+ """Return canonical originalIP from ordered endpoint[0], or None if absent."""
+ if not wan_endpoints:
+  return None
+ address, _ = _parse_ip_port(wan_endpoints[0], require_bracketed_ipv6=True, reject_special_ipv6=True)
+ return str(address)
+
+
+def validate_wan_endpoints(wan_endpoints):
+ """Validate ordered IP:PORT endpoints and return originalIP (None for an empty list)."""
+ if not isinstance(wan_endpoints, (list, tuple)):
+  raise ValueError("wan_endpoints must be an ordered list")
+ if not wan_endpoints:
+  return None
+ original_ip = original_ip_from_endpoints(wan_endpoints)
+ for endpoint in wan_endpoints[1:]:
+  _parse_ip_port(endpoint)
+ return original_ip
 
 class Registry:
  def __init__(self, path: str | Path):
@@ -68,9 +119,23 @@ class Registry:
    cert_cols={r["name"] for r in con.execute("PRAGMA table_info(issued_certificates)")}
    if "revoked_at" not in cert_cols:
     con.execute("ALTER TABLE issued_certificates ADD COLUMN revoked_at INTEGER")
-   # Version 2 is the directory/enrollment schema. This is safe to rerun after
-   # interruption because each ALTER is guarded by an introspection check.
-   con.execute("UPDATE schema_version SET version=2 WHERE singleton=1")
+   if "certificate_der_b64" not in cert_cols:
+    con.execute("ALTER TABLE issued_certificates ADD COLUMN certificate_der_b64 TEXT")
+   version_row=con.execute("SELECT version FROM schema_version WHERE singleton=1").fetchone()
+   old_version=int(version_row[0]) if version_row else 1
+   if old_version < 3:
+    # Preserve legacy rows; invalid or absent first endpoints remain unusable.
+    for row in con.execute("SELECT router_id,wan_endpoints FROM routers").fetchall():
+     try:
+      endpoints=json.loads(row["wan_endpoints"] or "[]")
+      usable=original_ip_from_endpoints(endpoints) is not None
+      if usable: validate_wan_endpoints(endpoints)
+     except (ValueError,TypeError,json.JSONDecodeError):
+      usable=False
+     con.execute("UPDATE routers SET original_ip_usable=? WHERE router_id=?",
+                 (1 if usable else 0,row["router_id"]))
+   # Version 3 adds signed RDR identity/address fields and the DER certificate.
+   con.execute("UPDATE schema_version SET version=3 WHERE singleton=1")
   try: self.path.chmod(0o640)
   except OSError: pass
 
@@ -96,12 +161,20 @@ class Registry:
 
  def set_directory_fields(self, router_id, *, wan_endpoints=None, gateway_ips=None, prefixes=None,
                           expected_rsa_public_key_sha256=None):
+  endpoint_usable = None
+  if wan_endpoints is not None:
+   try:
+    endpoint_usable = validate_wan_endpoints(wan_endpoints) is not None
+   except (ValueError,TypeError) as exc:
+    raise ValueError(f"invalid WAN endpoint metadata: {exc}") from exc
   with self.connect() as con:
    row=con.execute("SELECT router_id FROM routers WHERE router_id=?",(router_id,)).fetchone()
    if not row: raise ValueError("router must be registered before directory fields are set")
    fields={}
    for name,value in (("wan_endpoints",wan_endpoints),("gateway_ips",gateway_ips),("prefixes",prefixes)):
     if value is not None: fields[name]=json.dumps(value,separators=(",",":"),sort_keys=True)
+   if endpoint_usable is not None:
+    fields["original_ip_usable"]=1 if endpoint_usable else 0
    if expected_rsa_public_key_sha256 is not None:
     fields["expected_rsa_public_key_sha256"]=expected_rsa_public_key_sha256.lower() or None
    if fields:
@@ -125,11 +198,11 @@ class Registry:
        (ed25519_public_key,rsa_encryption_public_key,now,router_id))
    con.execute("UPDATE directory_meta SET directory_seq=directory_seq+1 WHERE singleton=1")
 
- def record_certificate(self, serial, router_id, before, after, digest, now):
+ def record_certificate(self, serial, router_id, before, after, digest, now, certificate_der_b64=None):
   with self.connect() as con:
    con.execute("""INSERT INTO issued_certificates(serial_number,router_id,not_before,not_after,status,
-       cert_sha256,created_at,revoked_at) VALUES(?,?,?,?,?,?,?,NULL)""",
-       (serial,router_id,before,after,"ACTIVE",digest,now))
+       cert_sha256,created_at,revoked_at,certificate_der_b64) VALUES(?,?,?,?,?,?,?,NULL,?)""",
+       (serial,router_id,before,after,"ACTIVE",digest,now,certificate_der_b64))
    con.execute("UPDATE routers SET record_seq=record_seq+1,updated_at=? WHERE router_id=?",(now,router_id))
    con.execute("UPDATE directory_meta SET directory_seq=directory_seq+1 WHERE singleton=1")
 
