@@ -88,7 +88,7 @@ def record_for_router(registry, router_id: str, now: int | None = None, validity
 
     spki_der_b64 = None
     identity_matches_certificate = False
-    certificate_der_b64 = cert.get("certificate_der_b64") if cert else None
+    certificate_der_b64 = cert["certificate_der_b64"] if cert else None
     try:
         raw_key = base64.b64decode(router.get("ed25519_public_key") or "", validate=True)
         if len(raw_key) != 32:
