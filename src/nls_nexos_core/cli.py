@@ -69,10 +69,11 @@ def bootstrap(config_path: str):
     settings.token_file.parent.mkdir(parents=True, exist_ok=True)
     settings.token_file.write_text(token + "\n", encoding="ascii")
     os.chmod(settings.token_file, 0o600)
-    Registry(settings.database_path)
+    registry = Registry(settings.database_path)
     control_key = _load_or_create_control_identity(settings.control_identity_key)
     public_raw = control_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     root_fp = hashlib.sha256(cert.public_bytes(serialization.Encoding.DER)).hexdigest()
+    registry.audit("CA_BOOTSTRAPPED", None, "Router-CA initialized by local administrator", int(time.time()))
     print(f"Router-CA root certificate: {settings.ca_certificate}")
     print(f"Router-CA root SHA-256 fingerprint: {root_fp}")
     print(f"Router-CA signing key: {settings.ca_private_key}")
@@ -86,12 +87,17 @@ def bootstrap(config_path: str):
 def register(config_path: str, router_id: str, token: str,
              public_key_sha256: str = "", ipv6: str = "", mac: str = "",
              rsa_public_key_sha256: str = "", wan_endpoints=None, gateway_ips=None, prefixes=None):
+    settings = Settings.load(config_path)
+    registry = Registry(settings.database_path)
+    now = int(time.time())
     if len(token) < 32:
+        registry.audit("ROUTER_REGISTER_DENIED", router_id, "enrollment token length rejected", now)
         raise SystemExit("Router enrollment token must be at least 32 characters")
     if wan_endpoints is not None:
         try:
             validate_wan_endpoints(wan_endpoints)
         except (ValueError, TypeError) as exc:
+            registry.audit("ROUTER_REGISTER_DENIED", router_id, "invalid WAN endpoint metadata", now)
             raise SystemExit(f"Invalid WAN endpoint metadata: {exc}") from exc
     try:
         for gateway in gateway_ips or []:
@@ -99,10 +105,8 @@ def register(config_path: str, router_id: str, token: str,
         for prefix in prefixes or []:
             ipaddress.ip_network(prefix, strict=False)
     except ValueError as exc:
-        raise SystemExit(f"Invalid gateway IP or prefix: {exc}")
-    settings = Settings.load(config_path)
-    registry = Registry(settings.database_path)
-    now = int(time.time())
+        registry.audit("ROUTER_REGISTER_DENIED", router_id, "invalid gateway or prefix metadata", now)
+        raise SystemExit(f"Invalid gateway IP or prefix: {exc}") from exc
     with registry.connect() as con:
         con.execute(
             """INSERT INTO routers(router_id,registered,status,expected_public_key_sha256,
@@ -116,12 +120,16 @@ def register(config_path: str, router_id: str, token: str,
              hashlib.sha256(token.encode()).hexdigest(), now, now),
         )
     metadata_supplied = bool(wan_endpoints or gateway_ips or prefixes or rsa_public_key_sha256)
-    registry.set_directory_fields(
-        router_id, wan_endpoints=list(wan_endpoints) if wan_endpoints else None,
-        gateway_ips=list(gateway_ips) if gateway_ips else None,
-        prefixes=list(prefixes) if prefixes else None,
-        expected_rsa_public_key_sha256=rsa_public_key_sha256 or None,
-    )
+    try:
+        registry.set_directory_fields(
+            router_id, wan_endpoints=list(wan_endpoints) if wan_endpoints else None,
+            gateway_ips=list(gateway_ips) if gateway_ips else None,
+            prefixes=list(prefixes) if prefixes else None,
+            expected_rsa_public_key_sha256=rsa_public_key_sha256 or None,
+        )
+    except ValueError as exc:
+        registry.audit("ROUTER_REGISTER_DENIED", router_id, "metadata registration rejected", int(time.time()))
+        raise SystemExit(f"Router registration rejected: {exc}") from exc
     if not metadata_supplied:
         registry.bump_directory_seq(router_id)
     registry.audit("ROUTER_REGISTERED", router_id, "registered by local administrator", now)
@@ -172,8 +180,10 @@ def revoke_certificate(config_path: str, serial: str):
     now = int(time.time())
     row = registry.get_certificate(serial)
     if not row:
+        registry.audit("CERT_REVOKE_DENIED", None, "certificate serial not found", now)
         raise SystemExit("Certificate serial not found")
     if not registry.revoke_certificate(serial, now):
+        registry.audit("CERT_REVOKE_DENIED", row["router_id"], "certificate is not active", now)
         raise SystemExit("Certificate is not active")
     registry.audit("CERT_REVOKED", row["router_id"], f"serial={row['serial_number']}", now)
     print(f"Revoked certificate {row['serial_number']} for router {row['router_id']}")
@@ -184,6 +194,7 @@ def revoke_router(config_path: str, router_id: str):
     registry = Registry(settings.database_path)
     now = int(time.time())
     if not registry.revoke_router(router_id, now):
+        registry.audit("ROUTER_REVOKE_DENIED", router_id, "router not found or already revoked", now)
         raise SystemExit("Router not found or already revoked")
     registry.audit("ROUTER_REVOKED", router_id, "router and active certificates revoked by administrator", now)
     print(f"Revoked router and active certificates: {router_id}")
