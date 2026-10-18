@@ -75,7 +75,7 @@ This amendment supersedes only conflicting statements above about the RDR fields
 
 ### RDR primary WAN address
 
-Add `originalIP` to every Router Directory Record (RDR). It is the primary WAN endpoint and MUST equal the first entry of `wan_endpoints`. It MUST be a canonical IPv6 address. For cryptographic encoding, encode it as its 16-byte packed IPv6 representation, not as a textual string. An RDR with an absent, invalid, or inconsistent `originalIP` is invalid and MUST NOT be used for a handshake. The full certificate is the CA-issued X.509 certificate in DER encoding; public keys used in the vIP input are DER SubjectPublicKeyInfo encodings.
+Add `originalIP` to every Router Directory Record (RDR). `wan_endpoints` is an ordered list and its order is significant: `wan_endpoints[0]` defines `originalIP`; updates MUST preserve the supplied order, and the RDR signature MUST cover the endpoint list in that order. Changing the first endpoint changes `originalIP`. The first endpoint MUST use bracketed IPv6 endpoint syntax `[IPv6]:PORT`; its port MUST be an integer from 1 through 65535. IPv6 zone identifiers (any `%...` suffix) are forbidden. Parse the address component with IPv6 canonicalization and set `originalIP` to that canonical IPv6 address, excluding brackets and port. Reject unspecified, loopback, multicast, link-local, and IPv4-mapped IPv6 addresses; ULA addresses are allowed. Additional endpoints retain the existing supported IP:PORT formats (bracketed IPv6 `[IPv6]:PORT` or IPv4 `IPv4:PORT`); hostnames are not supported. Registration and update MUST reject an invalid first endpoint or an `originalIP` inconsistent with it. An RDR with an absent, invalid, or inconsistent `originalIP` is invalid and MUST NOT be used for a handshake. The full certificate is the CA-issued X.509 certificate in DER encoding; public keys used in the vIP input are DER SubjectPublicKeyInfo encodings.
 
 ### vIP derivation
 
@@ -117,12 +117,13 @@ D still performs the mandatory fresh S lookup during S4/M3 processing; the early
 
 M1 MUST retain all existing NLH2 security fields and MUST additionally contain `request_for_peer_details: true`, the intended destination router ID, `vip_nonce`, `time_bucket`, and `vip_policy_version`. `vip_policy_version` is an unsigned integer identifying the versioned IPv6 address-classification policy; version 1 is defined below. The nonce, time bucket, policy version, and request fields MUST be covered by the M1 signature and sealing. D MUST reject an unknown or unsupported policy version before the pre-M2 CA lookup. The explicit request asks D to return its CA-registered identity details in M2. It does not authorize D to trust S; S remains subject to D's S4 cross-check.
 
-The outer IP header rules for the bootstrap exchange are:
+The outer IP header and UDP endpoint rules for the bootstrap exchange are:
 
-- M1 (S to D): source = derived vIP; destination = D.originalIP.
-- M2 (D to S): source = D.originalIP; destination = derived vIP.
-- M3 (S to D): source = derived vIP; destination = D.originalIP.
-- M4 (D to S): source = D.originalIP; destination = derived vIP.
+- `wan_endpoints[0]` is parsed as `[IPv6]:PORT`; its IPv6 address component is `originalIP` and its port is the router's bootstrap/listener port. The endpoint's port is not part of `originalIP` or the vIP hash input.
+- M1 (S to D): send to `(D.originalIP, port parsed from D.wan_endpoints[0])`; outer source = derived vIP.
+- M2 (D to S): outer source = D.originalIP; outer destination = derived vIP. Send to the source router's advertised bootstrap port from S.wan_endpoints[0].
+- M3 (S to D): send to `(D.originalIP, port parsed from D.wan_endpoints[0])`; outer source = derived vIP.
+- M4 (D to S): outer source = D.originalIP; outer destination = derived vIP. Send to the source router's advertised bootstrap port from S.wan_endpoints[0].
 
 M2 MUST carry D's certificate, public key, originalIP, and signed RDR, while retaining the existing DH key, SA proposal, nonce, transcript-hash, and signature fields required by NLH2. M3 MUST carry S's certificate, public key, originalIP, and signed RDR, while retaining the existing DH key, selected SA, transcript-hash, and signature fields. M4 remains the authenticated acknowledgement with transcript confirmation. Do not remove or weaken existing NLH2 fields to implement these additions.
 
