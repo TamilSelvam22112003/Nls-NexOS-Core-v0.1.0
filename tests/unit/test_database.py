@@ -130,3 +130,38 @@ def test_disable_router_advances_sequences_and_revoked_router_cannot_be_enabled(
     assert db.set_router_status("router-status", "ACTIVE", now + 2)
     assert db.revoke_router("router-status", now + 3)
     assert not db.set_router_status("router-status", "ACTIVE", now + 4)
+
+
+
+def test_legacy_duplicate_original_ips_are_retained_but_only_one_is_usable(tmp_path):
+    import json
+    path = tmp_path / "duplicate-legacy.sqlite3"
+    db = Registry(path)
+    now = int(time.time())
+    endpoints = json.dumps(["[fd42:100::1]:4790"])
+    with db.connect() as con:
+        for router_id in ("router-a", "router-b"):
+            con.execute(
+                "INSERT INTO routers(router_id,registered,status,created_at,updated_at,wan_endpoints,original_ip,original_ip_usable) "
+                "VALUES(?,1,'ACTIVE',?,?,?,NULL,0)",
+                (router_id, now, now, endpoints),
+            )
+        con.execute("UPDATE schema_version SET version=3 WHERE singleton=1")
+    db.initialize()
+    first = db.get_router("router-a")
+    second = db.get_router("router-b")
+    assert first["original_ip"] == "fd42:100::1" and first["original_ip_usable"] == 1
+    assert second["original_ip"] is None and second["original_ip_usable"] == 0
+    assert db.get_router("router-a") is not None and db.get_router("router-b") is not None
+
+
+def test_original_ip_is_canonicalized_before_storage(tmp_path):
+    db = Registry(tmp_path / "canonical-original-ip.sqlite3")
+    now = int(time.time())
+    with db.connect() as con:
+        con.execute(
+            "INSERT INTO routers(router_id,registered,status,created_at,updated_at) VALUES(?,1,'ACTIVE',?,?)",
+            ("router-canonical", now, now),
+        )
+    db.set_directory_fields("router-canonical", wan_endpoints=["[FD42:0100:0000:0000:0000:0000:0000:0001]:4790"])
+    assert db.get_router("router-canonical")["original_ip"] == "fd42:100::1"
