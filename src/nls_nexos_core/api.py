@@ -91,7 +91,10 @@ def handle_control_request(message: dict, authority, registry, settings,
             if record is None:
                 from .directory import sign_payload
                 record = sign_payload({
-                    "router_id": target, "ed25519_public_key": None, "rsa_encryption_public_key": None,
+                    "rdr_version": 2,
+                    "router_id": target, "ed25519_public_key": None,
+                    "ed25519_public_key_spki_der_b64": None, "rsa_encryption_public_key": None,
+                    "certificate_der_b64": None, "originalIP": None, "original_ip_usable": False,
                     "wan_endpoints": [], "gateway_ips": [], "prefixes": [], "certificate_serial": None,
                     "status": "UNKNOWN", "record_seq": 0, "issued_at": int(time.time()), "client_nonce": nonce,
                     "valid_until": int(time.time()) + 30,
