@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from nls_nexos_core.api import handle_control_request
+from nls_nexos_core.control import NLSControlServer
 from nls_nexos_core.database import Registry
 from nls_nexos_core.directory import verify_signature
 
@@ -39,9 +40,10 @@ def test_lookup_unknown_is_signed_and_nonce_bound(tmp_path):
     _router(registry, "caller")
     key = ed25519.Ed25519PrivateKey.generate()
     nonce = "n" * 43
+    caller_serial = hashlib.sha256(b"caller").hexdigest()[:12]
     response = handle_control_request(
         {"type": "lookup", "router_id": "caller", "target_router_id": "missing", "client_nonce": nonce},
-        None, registry, _settings(), {"router_id": "caller", "serial_number": "a1"}, key,
+        None, registry, _settings(), {"router_id": "caller", "serial_number": caller_serial}, key,
     )
     assert response["type"] == "lookup-result"
     assert response["client_nonce"] == nonce
@@ -57,7 +59,7 @@ def test_lookup_reports_revoked_and_expired_router_status(tmp_path):
     _router(registry, "router-a", status="REVOKED")
     _router(registry, "router-expired", expired=True)
     key = ed25519.Ed25519PrivateKey.generate()
-    caller = {"router_id": "caller", "serial_number": "a1"}
+    caller = {"router_id": "caller", "serial_number": hashlib.sha256(b"caller").hexdigest()[:12]}
     for target, expected in (("router-a", "REVOKED"), ("router-expired", "EXPIRED")):
         nonce = ("n" if target == "router-a" else "e") * 43
         response = handle_control_request(
@@ -95,3 +97,78 @@ def test_heartbeat_contains_directory_sequence_and_revocation_state(tmp_path):
     assert response["type"] == "heartbeat-result"
     assert isinstance(response["directory_seq"], int)
     assert response["revocation_state"]["revoked_certificates"]
+
+
+
+def test_lookup_rejects_disabled_caller_even_if_transport_auth_was_cached(tmp_path):
+    registry = Registry(tmp_path / "registry.sqlite3")
+    _router(registry, "caller", status="DISABLED")
+    key = ed25519.Ed25519PrivateKey.generate()
+    caller_serial = hashlib.sha256(b"caller").hexdigest()[:12]
+    response = handle_control_request(
+        {"type": "lookup", "router_id": "caller", "target_router_id": "target", "client_nonce": "n" * 43},
+        None, registry, _settings(), {"router_id": "caller", "serial_number": caller_serial}, key,
+    )
+    assert response["type"] == "error"
+    assert response["code"] == "not-authorized"
+    with registry.connect() as con:
+        row = con.execute("SELECT detail FROM audit_log WHERE event='DIRECTORY_LOOKUP_DENIED'").fetchone()
+    assert row and "token" not in row["detail"].lower() and "private" not in row["detail"].lower()
+
+
+def test_lookup_rate_limit_is_per_authenticated_router(tmp_path, monkeypatch):
+    import nls_nexos_core.control as control_module
+    registry = Registry(tmp_path / "registry.sqlite3")
+    _router(registry, "caller")
+    key = ed25519.Ed25519PrivateKey.generate()
+    server = NLSControlServer(_settings(), registry, object(), key)
+    serial = hashlib.sha256(b"caller").hexdigest()[:12]
+    server._lookup_times["caller"] = [time.monotonic()] * 120
+    response = server._dispatch(
+        {"type": "lookup", "router_id": "caller", "target_router_id": "target", "client_nonce": "n" * 43},
+        {"router_id": "caller", "serial_number": serial},
+    )
+    assert response["type"] == "error" and response["code"] == "rate-limited"
+
+
+def test_lookup_concurrency_cap_rejects_excess_parallel_requests(tmp_path, monkeypatch):
+    import threading
+    import nls_nexos_core.control as control_module
+    registry = Registry(tmp_path / "registry.sqlite3")
+    _router(registry, "caller")
+    key = ed25519.Ed25519PrivateKey.generate()
+    server = NLSControlServer(_settings(), registry, object(), key)
+    server.max_concurrent_lookups_per_router = 2
+    serial = hashlib.sha256(b"caller").hexdigest()[:12]
+    entered = 0
+    lock = threading.Lock()
+    release = threading.Event()
+    all_entered = threading.Event()
+
+    def blocked_handler(**kwargs):
+        nonlocal entered
+        with lock:
+            entered += 1
+            if entered == 2:
+                all_entered.set()
+        release.wait(timeout=3)
+        return {"type": "lookup-result", "ok": True}
+
+    monkeypatch.setattr(control_module, "handle_control_request", blocked_handler)
+    auth = {"router_id": "caller", "serial_number": serial}
+    workers = [
+        threading.Thread(target=server._dispatch, args=(
+            {"type": "lookup", "router_id": "caller", "target_router_id": "target", "client_nonce": str(i) * 16},
+            auth,
+        )) for i in (1, 2)
+    ]
+    for worker in workers: worker.start()
+    assert all_entered.wait(timeout=2)
+    rejected = server._dispatch(
+        {"type": "lookup", "router_id": "caller", "target_router_id": "target", "client_nonce": "z" * 16},
+        auth,
+    )
+    assert rejected["type"] == "error" and rejected["code"] == "rate-limited"
+    release.set()
+    for worker in workers: worker.join(timeout=3)
+    assert all(not worker.is_alive() for worker in workers)
