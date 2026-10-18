@@ -176,3 +176,146 @@ When and only when `vip.lab_temporary_route.enabled = true` in lab mode, after D
 If installed, D MUST remove this route on successful handshake completion, handshake failure, or handshake timeout. Cleanup MUST also run when the pending handshake is cancelled or its state is discarded. Removal MUST be scoped to the exact route installed for that handshake and MUST NOT delete or overwrite an operator-managed route. Route installation failure MUST fail the lab handshake closed and MUST NOT leave partially allocated vIP or handshake state. This /128-via-S.originalIP behavior is strictly for lab testing and MUST NOT be treated as the production routing solution.
 
 OPEN QUESTION: The first 128 digest bits are an arbitrary IPv6 address and may not be routable to S on a multi-hop or Internet WAN. Do not silently mask or rewrite digest bits to fit `vip.pool`, because doing so changes the specified derivation. Lab tests MUST establish whether the lab-only temporary route provides the required bootstrap reachability in the controlled topology. Production use over routed WANs requires a separately documented routing/encapsulation strategy that preserves the exact derivation and return-path reachability. Spoofed global-unicast source addresses are expected to be dropped by ingress filtering (BCP 38 / uRPF) on production networks.
+
+## Amendment: Minimal M1 disclosure and SourceToken data plane
+
+This amendment is normative and applies to the NLH2 handshake and its post-handshake data plane. It changes only the requirements explicitly listed below. It does not itself implement or validate the amended protocol.
+
+### Scope and supersession
+
+This amendment supersedes only conflicting statements in earlier parts of this specification about:
+- the STEP A S2 M1 field list, and any interpretation that M1 carries S's certificate, originalIP, or signed RDR;
+- the hybrid NLH2 amendment's M1 contents and field names;
+- STEP A S5 endpoint-switch/data-plane wire format and the hybrid vIP lifecycle, but only for post-M4 data packet addressing and format.
+
+Existing M2, M3 and M4 message contents remain unchanged except for the M3 disclosure timing stated below. The vIP retirement rule and VIP_AFTER_SWITCH rejection semantics remain in force. The pinned policy-v1 table/hash, ordered wan_endpoints, originalIP requirements, replay/freshness rules, signatures, transcript checks, key schedule, fail-closed behavior and the existing NLH2 handshake framing remain the security base unless this amendment explicitly says otherwise.
+
+### A. Minimal M1 disclosure
+
+M1 is sealed to D's RSA encryption public key and signed by S. After opening M1, D verifies sig_S over the canonical encoding of every M1 field except sig_S itself. Padding is part of the signed canonical encoding.
+
+M1 contains exactly the following protocol fields, along with the padding required by the existing anti-amplification rule:
+- session_id;
+- source_router_id;
+- source_ed25519_pub, S's Ed25519 verification public key;
+- source_rsa_pub, S's RSA encryption public key;
+- request_for_peer_details, which MUST be the boolean true;
+- destination_router_id;
+- vip;
+- vip_nonce, a fresh random 32-byte value;
+- time_bucket, an unsigned 64-bit big-endian integer;
+- vip_policy_version;
+- nonce_s, the existing random handshake nonce;
+- timestamp;
+- padding;
+- sig_S.
+
+The field name source_router_id supersedes the earlier S.router_id name for this M1 field. Fields MUST have the specified types; unknown fields MUST be rejected. The existing M1 padding/anti-amplification requirement remains in force: M1 MUST be padded to at least the maximum permitted M2 size.
+
+M1 MUST NOT contain S's certificate, S's originalIP, or S's signed Router Directory Record (RDR). D MUST authenticate an authoritative Router-CA lookup for S before producing M2. D MUST compare both public keys in M1 with the corresponding keys in S's authoritative Router-CA record and reject a mismatch. A cached record may be used only for the existing early screening/pre-checks; it MUST NOT replace the required authenticated authoritative lookup. Unknown, revoked, disabled, stale, or otherwise invalid records fail closed.
+
+S MUST validate D's M2 against D's authoritative Router-CA record before sending M3. S reveals its certificate, originalIP and signed RDR in M3 only after that validation succeeds. The M3 contents themselves are unchanged. M2, M3 and M4 otherwise retain their already specified fields, signatures, transcript checks and key schedule.
+
+The intent is to disclose only the keys and parameters required for D's early vIP checks in M1, and defer S's certificate, originalIP and signed RDR until after S has authenticated D.
+
+### B. Post-M4 SourceToken data plane
+
+After successful verification of M4, the vIP is retired for data-plane use as already specified by VIP_AFTER_SWITCH. The following outer addressing and packet format apply to all subsequent data packets.
+
+#### B.1 Outer packet addressing and UDP ports
+
+For traffic A to B:
+- outer IPv6 source is SourceToken(A-to-B);
+- outer IPv6 destination is B's originalIP;
+- UDP source port is the port in A's own advertised wan_endpoints[0];
+- UDP destination port is the port in B's advertised wan_endpoints[0].
+
+For traffic B to A, reverse A and B. The source port is always the sender's own advertised wan_endpoints[0] port, not the peer's port. A receiver MUST NOT use the observed UDP source port for demultiplexing, session selection, authorization, routing, or any other protocol decision. The UDP ports are not included in the AEAD associated data.
+
+#### B.2 SourceToken construction and selection
+
+SourceToken is a 16-byte value produced by one AES-256 block-cipher operation on the sender's packed 16-byte IPv6 originalIP. For each direction and each attempt, derive a 32-byte key as:
+
+- input key material: the existing session_secret (the NLH2 X25519 shared value);
+- salt: the existing handshake salt, SHA-256(H3 || nonce_s || nonce_d);
+- info: the direction-specific ASCII label NLS-SourceToken-v1/A-to-B or NLS-SourceToken-v1/B-to-A, concatenated with uint32_be(attempt);
+- KDF: the existing HKDF-SHA256 construction.
+
+Encrypt exactly one 16-byte block under the derived AES-256 key. This operation uses no IV, padding, chaining mode, or multi-block format.
+
+Attempts are uint32 big-endian values 0 through 255 inclusive. For each attempt, a candidate MUST be rejected and redrawn at the next attempt if it is invalid under the same selected, versioned address-policy mechanism used for vIP selection, equals this session's retired vIP, or equals either router's originalIP. If no candidate qualifies within attempts 0 through 255, the session MUST fail closed.
+
+The receiver precomputes expected inbound SourceTokens and performs an exact-match lookup on the outer IPv6 source address. A collision is scoped to the receiving router's local active/pending token table. A collision MUST NOT overwrite an existing entry; a detected local table collision fails the session closed. The token is constant for a direction during one session and changes when the session is rekeyed. Per-packet SourceToken variation is out of scope.
+
+#### B.3 Data payload, nonce and authentication
+
+The UDP payload is:
+
+  counter (uint64 big-endian) || AEAD ciphertext || 16-byte AEAD tag
+
+The AEAD plaintext is:
+
+  message_type (1 byte) || message_body
+
+Message type 0 means a tunneled IP packet; the message body MUST be the complete original client/server IP packet. The inner packet's source and destination IP addresses are carried only inside the ciphertext. All nonzero message-type values remain unassigned/reserved until their control semantics are explicitly specified. A sender MUST NOT emit an unassigned type. A receiver MUST authenticate the record before acting on the message type, and MUST silently drop an unknown or reserved type after successful authentication. The type byte is encrypted, not exposed as an unencrypted wire field; its presence increases the ciphertext/plaintext content length by one byte.
+
+The existing NLH2 directional AEAD keys and four-byte directional IV prefixes are used. The 12-byte AES-256-GCM nonce is the four-byte directional IV prefix concatenated with the uint64 big-endian counter. The 40-byte associated data is exactly: 16-byte outer IPv6 source || 16-byte outer IPv6 destination || 8-byte counter. UDP source and destination ports are not included in the associated data.
+
+The sender's counter starts at zero and increases strictly for each data-plane record in that direction. It MUST NOT wrap. The receiver uses the existing default 128-record replay window, permits authenticated reordering within that window, rejects duplicates and records too old for the window, and updates replay state only after successful AEAD authentication. Authentication failure MUST NOT advance replay state.
+
+The existing NLH2 rekey policy remains: rekey at 2^32 packets in either direction or one hour, whichever occurs first, using make-before-break. Rekey establishes new directional keys, nonce prefixes and SourceTokens. A counter MUST NOT wrap; if rekey cannot complete before the hard limit, the session fails closed.
+
+#### B.4 Datagram demultiplexing
+
+Demultiplexing MUST follow this order:
+1. An exact outer-source match in the receiver's active/pending SourceToken table selects the NLS data path. The receiver then performs AEAD, counter, replay-window and message-type checks.
+2. If there is no exact SourceToken match, the datagram may enter the NLH2 handshake path only when it passes the existing NLH2 framing and pre-checks.
+3. All other datagrams are dropped silently. There MUST be no fallback to the retired cleartext handshake or legacy data formats.
+
+The receiver MUST NOT use the observed UDP source port in this decision. SourceToken matching precedes handshake fallback. Existing vIP retirement and VIP_AFTER_SWITCH rejection semantics remain; retired-vIP traffic receives no protocol response, though a local diagnostic may record the defined VIP_AFTER_SWITCH reason.
+
+#### B.5 Legacy NLE2 header and control-carrier audit
+
+The current NLE2 header is 32 bytes: magic NLE2 (4 bytes), version 2 (1 byte), flags/reserved (3 zero bytes), session_id (16 bytes), and sequence (8 bytes). The implementation requires all three flags/reserved bytes to be zero. No keepalive, close, rekey, or control-message type is defined in those bytes.
+
+The effects of replacing the legacy header are:
+- NLE2 magic/version no longer appear in the data packet. Data dispatch is selected by exact SourceToken lookup; the handshake continues to use NLH2 framing.
+- The required-zero flags/reserved bytes carry no defined behavior, so no defined NLE2 flag behavior is removed.
+- The old header session_id is removed from the outer data header; exact SourceToken lookup provides data-session selection.
+- The old header sequence is replaced by the uint64 counter in the new payload and continues to drive nonce generation and replay protection.
+- No NLE2 keepalive message is defined. Existing local session-idle handling is not an on-wire keepalive.
+- NLE2 defines no close message type. Local session teardown remains local. The separate experimental NLSC control protocol has its own frame types, including CLOSE, and is not an NLE2 header field.
+- Rekey is triggered by local daemon age/packet thresholds and carried by a new NLH2 handshake, not by NLE2 flags/reserved bytes.
+- NLE2 defines no data-header control types. The new encrypted message-type byte reserves room for future explicitly specified control messages but does not import NLSC frame types or semantics.
+
+#### B.6 Security and operational limitations
+
+This SourceToken mechanism is not endpoint anonymity. In each direction, the actual destination router originalIP remains visible as the outer IPv6 destination. A per-direction SourceToken is stable within the session and can correlate packets from that session.
+
+The sender must be able to emit UDP packets with the SourceToken as the outer IPv6 source. Implementations may require a temporary /128 address, raw sockets, or carefully scoped packet-manipulation rules; these must be removed at session termination. The implementation approach and cleanup tests are deferred to the applicable implementation workstream.
+
+ICMPv6 Packet Too Big messages may not be delivered reliably to the token source address, so PMTU discovery can be unreliable. Implementations MUST use a conservative tunnel MTU and clamp TCP MSS as needed. The interaction between large M1 handshake messages, IPv6 fragmentation and tunnel MTU remains an explicit lab-validation risk. SourceToken source addresses may also be dropped by BCP 38/uRPF ingress filtering; use is limited to a controlled lab until the deployment and source-address policy is documented.
+
+### C. Required tests for this amendment
+
+These are specification requirements, not a claim that tests have been implemented:
+- M1 without certificate, originalIP or signed RDR is accepted; M1 containing any of these fields is rejected.
+- M1 public-key mismatch against the authoritative Router-CA record is rejected.
+- M1 signature covers all canonical fields except sig_S, including padding.
+- SourceToken derivation is deterministic for a given session/direction/attempt and is direction-separated.
+- Candidates equal to the retired vIP or either router's originalIP are redrawn; address-policy rejection is honored; exhaustion of attempts 0 through 255 fails closed.
+- Receiving-router local active/pending token collisions do not overwrite an entry and fail the session closed.
+- Exact SourceToken match selects the data path; unmatched packets use only the existing NLH2 pre-check path or are silently dropped.
+- Changing only the observed UDP source port does not change protocol decisions; outbound source port is the sender's advertised wan_endpoints[0] port.
+- Type 0 successfully transports an inner IP packet. Unassigned message types cause no control action and are silently dropped after authentication.
+- Tampering with outer source, outer destination or counter causes AEAD authentication failure.
+- Replay and out-of-window counters are rejected; replay state is unchanged after failed authentication.
+- Rekey changes SourceTokens and directional keys/prefixes; counter wrap is prohibited.
+- The retired vIP is not reused as a SourceToken; no vIP data traffic is accepted after VIP_AFTER_SWITCH.
+- Captures confirm that inner IP addresses and message type values are encrypted, while documenting that outer destinations and per-session packet lengths remain visible.
+
+### D. Remaining open questions
+
+1. Should specific encrypted data-plane message types be assigned for keepalive, close or other control operations now, or should no such types be emitted until a separate control-message specification is approved?
+2. Should the separate experimental NLSC control protocol (including its CLOSE frame type) remain independent, or should selected NLSC operations eventually be mapped to explicitly defined encrypted data-plane message types?
+3. The exact PMTU/ICMPv6 error strategy for the SourceToken source address and the handling of oversized or fragmented M1 messages still require lab validation.
