@@ -179,3 +179,35 @@ def test_admin_registered_rsa_fingerprint_must_match(tmp_path):
     request = _request("router-fp", identity, token, now, "fp-mismatch")
     with pytest.raises(EnrollmentDenied):
         authority.enroll(request, bootstrap, token)
+
+
+def test_unregistered_router_cannot_enroll(tmp_path):
+    ca_cert, ca_key = _ca_files(tmp_path)
+    settings = _settings(tmp_path, ca_cert, ca_key)
+    registry = Registry(settings.database_path)
+    bootstrap = "bootstrap-" + "u" * 48
+    token = "router-" + "v" * 48
+    now = int(datetime.now(timezone.utc).timestamp())
+    authority = CertificateAuthority(settings, registry, bootstrap)
+    request = _request("never-registered", ed25519.Ed25519PrivateKey.generate(), token, now, "unregistered")
+    with pytest.raises(EnrollmentDenied):
+        authority.enroll(request, bootstrap, token)
+
+
+@pytest.mark.parametrize("status", ["DISABLED", "REVOKED"])
+def test_disabled_or_revoked_router_cannot_enroll(tmp_path, status):
+    ca_cert, ca_key = _ca_files(tmp_path)
+    settings = _settings(tmp_path, ca_cert, ca_key)
+    registry = Registry(settings.database_path)
+    bootstrap = "bootstrap-" + status.lower() + "b" * 48
+    token = "router-" + status.lower() + "r" * 48
+    now = int(datetime.now(timezone.utc).timestamp())
+    _register(registry, "router-status", token, now)
+    if status == "DISABLED":
+        assert registry.set_router_status("router-status", "DISABLED", now + 1)
+    else:
+        assert registry.revoke_router("router-status", now + 1)
+    authority = CertificateAuthority(settings, registry, bootstrap)
+    request = _request("router-status", ed25519.Ed25519PrivateKey.generate(), token, now, "status-" + status.lower())
+    with pytest.raises(EnrollmentDenied):
+        authority.enroll(request, bootstrap, token)
