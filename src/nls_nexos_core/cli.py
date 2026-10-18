@@ -138,7 +138,11 @@ def register(config_path: str, router_id: str, token: str,
 
 def update_router(config_path: str, router_id: str, wan_endpoints=None, gateway_ips=None, prefixes=None,
                   rsa_public_key_sha256: str | None = None):
+    settings = Settings.load(config_path)
+    registry = Registry(settings.database_path)
+    now = int(time.time())
     if not any(value is not None for value in (wan_endpoints, gateway_ips, prefixes, rsa_public_key_sha256)):
+        registry.audit("ROUTER_UPDATE_DENIED", router_id, "no metadata fields supplied", now)
         raise SystemExit("update-router requires at least one metadata option")
     try:
         for gateway in gateway_ips or []:
@@ -146,9 +150,8 @@ def update_router(config_path: str, router_id: str, wan_endpoints=None, gateway_
         for prefix in prefixes or []:
             ipaddress.ip_network(prefix, strict=False)
     except ValueError as exc:
+        registry.audit("ROUTER_UPDATE_DENIED", router_id, "invalid gateway or prefix metadata", now)
         raise SystemExit(f"Invalid gateway IP or prefix: {exc}") from exc
-    settings = Settings.load(config_path)
-    registry = Registry(settings.database_path)
     try:
         registry.set_directory_fields(
             router_id, wan_endpoints=wan_endpoints, gateway_ips=gateway_ips, prefixes=prefixes,
