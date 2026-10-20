@@ -28,7 +28,7 @@ A control-channel session is not evidence of an established NLH2 data session. L
 
 Core `src/nls_nexos_core/control_protocol.py` declares `MAGIC=b"NLSC"` and canonical JSON. The README documents this as the separate experimental TCP control channel. It is not the router-to-router NLH2 handshake and must not be conflated with the data plane.
 
-NetOS `nls/handshake.py` currently declares `MAGIC=b"NLSH"` and canonical JSON, which conflicts with the master-spec NLH2 sealed deterministic-CBOR handshake. This cross-repository mismatch must be resolved with an explicit protocol migration and regression tests rather than silently weakening either protocol.
+NetOS `nls/handshake.py` retains legacy `NLSH`/JSON helpers, but the active daemon imports the v2 NLH2 APIs from that module. The remaining active-path gaps are the amended M1 field/disclosure contract, deterministic vIP derivation and the SourceToken data plane (NetOS still uses the legacy NLE2 header). These must be migrated with regression tests; the existence of legacy helpers is not proof that the active handshake uses NLSH.
 
 ## Gate before implementation changes
 
