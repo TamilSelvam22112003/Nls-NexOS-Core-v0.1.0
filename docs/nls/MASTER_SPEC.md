@@ -357,3 +357,39 @@ Specification text, test names, and external descriptions MUST use "source-addre
 
 **Status:** The SourceToken data plane is specified but not yet implemented; implementation is planned in Segment 7.
 
+## Architecture Amendment — Hop-by-Hop Data Plane (2026-10-21)
+
+**Decision:** NLS uses hop-by-hop protection. This amendment supersedes any prior statement that transit routers forward an opaque end-to-end NLE2 inner packet without decrypting it. It changes the data-plane forwarding model only; it does not waive the existing Phase 0 or other implementation gates.
+
+### Normative forwarding behavior
+
+For each adjacent pair R_i → R_(i+1), the routers establish an authenticated hop session. R_i protects the packet using its directional session key for R_(i+1). R_(i+1) authenticates and decrypts the hop packet, enforces peer/session binding and replay protection, validates the packet and local routing policy, selects the next hop from the existing routing plane, updates the **NLS hop-level source identity** to R_(i+1), and re-protects the packet using the session for R_(i+2). Return traffic uses independently derived reverse-direction keys and replay state.
+
+The original inner IP packet MUST remain semantically unchanged during transit, including its client source and server destination addresses, unless a separately specified gateway/NAT function is explicitly enabled. Updating the NLS hop-level source identity MUST NOT rewrite the original inner IP source address. This preserves ordinary client/server addressing while identifying the immediate sender on each NLS hop.
+
+### Confidentiality and trust boundary
+
+- The underlay sees the outer next-hop endpoint and packet timing/size. It MUST NOT see the inner IP header or payload on an NLS-protected transit link.
+- Each trusted transit router decrypts the incoming hop packet and therefore can observe the inner IP header and payload during processing. NLS MUST NOT claim that hop-by-hop protection conceals the original client source IP from trusted transit routers.
+- If source identity must also be concealed from transit routers, that is a separate end-to-end privacy requirement and needs an additional end-to-end encrypted origin-identity mechanism; it is not provided by hop-by-hop encryption alone.
+- No plaintext fallback is permitted. Authentication failure, replay, expired/revoked peer, missing next-hop session, malformed packet, or policy denial results in drop and a redacted audit event.
+
+### Cryptographic requirements
+
+Use the authenticated router-to-router handshake and X25519 + HKDF-SHA-256 to derive independent directional hop keys. Use AES-256-GCM for each hop packet, with a unique nonce under each key and the complete canonical NLS header authenticated as associated data. Do not use RSA-OAEP to wrap a fresh data key per packet. Sequence/replay state is scoped to the directional hop session. Re-key or invalidate sessions on peer revocation, certificate expiry, session expiry, or endpoint/identity mismatch.
+
+### vIP is a separate unresolved normative item
+
+The SHA-derived vIP requirement remains pending a precise definition of canonical inputs, encoding, hash/truncation, IPv6 prefix/exclusion policy, nonce/time bucket, collision handling, identity binding, expiry, and revocation. A 128-bit hash output MUST NOT be treated as automatically routable or collision-free. The existing random temporary IPv6 allocator is not evidence that SHA-derived vIP is implemented.
+
+### Required implementation gates
+
+Before protocol code changes are approved:
+1. Reconcile packet wire format and this amendment in both repositories.
+2. Define whether the per-hop protected plaintext is the complete inner IP packet and specify MTU/fragmentation behavior.
+3. Test invalid AEAD tags, replay, wrong peer/session, stale/revoked/expired certificates, malformed headers, absent next-hop sessions, and no-plaintext-fallback behavior.
+4. Demonstrate bidirectional traffic across at least four routers with packet captures showing hop ciphertext changes at every hop and no plaintext on transit links.
+5. Verify OSPF/BGP adjacency, convergence, route preservation, and recovery after session loss.
+6. Pass the existing Phase 0 approval gate and obtain fresh Ubuntu 22.04/24.04 CI evidence on the exact branch heads.
+
+This amendment makes an architecture choice; it does not assert that the design is implemented or validated, and it makes no comparative claim against TLS or IPsec.
