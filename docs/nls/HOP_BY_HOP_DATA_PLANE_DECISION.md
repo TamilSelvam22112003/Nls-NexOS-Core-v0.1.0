@@ -45,18 +45,19 @@ Return traffic follows the same steps with independent reverse-direction keys an
 - Derive separate directional hop keys from the authenticated key agreement using HKDF-SHA-256 with protocol/session context. Do not use RSA public-key encryption to generate a fresh symmetric key independently for each data packet.
 - Revocation, certificate expiry, session expiry, peer endpoint changes, and rekey must invalidate or replace affected hop sessions without disturbing unrelated routes.
 
-## vIP decision boundary
+## vIP role and lifecycle
 
-The SHA-derived vIP requirement is not defined sufficiently by the architecture choice alone. Before implementation, the normative spec must define:
-- exact canonical input fields and byte encoding;
-- hash function and output truncation;
-- IPv6 prefix and reserved/excluded address policy;
-- nonce/time-bucket inputs and clock-skew tolerance, if used;
-- collision handling and whether the address is stable or per-session;
-- ownership, expiry, revocation, and mapping lifecycle;
-- how the receiving router authenticates the mapping and prevents spoofed or stale mappings.
+The normative SHA-derived vIP input encoding, hash/truncation, address-policy version, nonce/time-bucket checks, and peer validation are specified by the hybrid NLH2 amendment in `docs/nls/MASTER_SPEC.md`. That specification—not this ADR—remains the wire-level source of truth. Implementation and deterministic validation are still pending.
 
-A 128-bit digest must not automatically be treated as a globally routable or conflict-free IPv6 address. The current random temporary-address allocator must not be silently described as implementing SHA-derived vIP.
+- vIP is a temporary bootstrap address for the authenticated NLH2 M1–M4 exchange only. It is not a carrier for client/server payload and must not be used as the post-handshake data-plane address.
+- “Original data of hop-A” means the peer's authoritative router identity and original endpoint details needed for trust validation; it does not mean application payload.
+- After those details are authenticated and M4 is verified, routers switch to the authenticated real endpoint/session addressing and retire the vIP. Failed or timed-out handshakes clean up temporary state.
+- A vIP has finite validity, is bound to the handshake/session context, and must not be reused to revive an expired session. Stale, replayed, retired, or revoked mappings are rejected.
+- Interface-IP changes require authenticated peer revalidation and a controlled endpoint/session update or new handshake. An IP address alone never proves router identity.
+- Retiring a vIP must not silently break an otherwise valid session; if the established session expires or its endpoint binding changes, traffic pauses/drops until a valid replacement session is established. Never fall back to plaintext.
+- Tests must cover post-M4 vIP absence, success/failure/timeout cleanup, stale/replay rejection, interface-IP changes, and valid session replacement.
+
+The existing random temporary-address allocator is not evidence that the SHA-derived vIP design is implemented. No implementation or test pass is claimed here.
 
 ## Acceptance gates before implementation is approved
 
