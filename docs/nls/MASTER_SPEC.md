@@ -380,7 +380,7 @@ Use the authenticated router-to-router handshake and X25519 + HKDF-SHA-256 to de
 
 ### vIP is a separate unresolved normative item
 
-The SHA-derived vIP requirement remains pending a precise definition of canonical inputs, encoding, hash/truncation, IPv6 prefix/exclusion policy, nonce/time bucket, collision handling, identity binding, expiry, and revocation. A 128-bit hash output MUST NOT be treated as automatically routable or collision-free. The existing random temporary IPv6 allocator is not evidence that SHA-derived vIP is implemented.
+The hybrid NLH2 amendment above normatively defines the SHA-derived vIP inputs, byte encoding, hash/truncation, address-policy version, nonce/time-bucket checks, and peer recomputation. Implementation and deterministic validation remain pending; collision handling and lifecycle behavior must be tested. A 128-bit hash output MUST NOT be treated as automatically routable or collision-free. The existing random temporary IPv6 allocator is not evidence that SHA-derived vIP is implemented.
 
 ### Required implementation gates
 
@@ -393,3 +393,16 @@ Before protocol code changes are approved:
 6. Pass the existing Phase 0 approval gate and obtain fresh Ubuntu 22.04/24.04 CI evidence on the exact branch heads.
 
 This amendment makes an architecture choice; it does not assert that the design is implemented or validated, and it makes no comparative claim against TLS or IPsec.
+
+
+### vIP bootstrap-only role and lifecycle clarification (2026-10-21)
+
+This clarification resolves the vIP lifecycle wording for the hop-by-hop architecture and supersedes any contradictory statement that the vIP carries post-handshake client/server data.
+
+- **Not a payload carrier:** A vIP is a temporary bootstrap/peer-identity address used for the NLH2 M1–M4 exchange. It does not encode, contain, transport, or replace the client/server payload. Payload is carried only by the separately specified, authenticated NLS data plane.
+- **Purpose of the exchange:** The bootstrap exchange lets the routers obtain and validate the peer's authoritative router identity and original endpoint details, complete the authenticated handshake, and establish the hop session. “Original data of hop-A” means the original router identity/endpoint information needed to authenticate and establish that hop—not application payload.
+- **Expiry condition:** The vIP is valid only for the bounded bootstrap exchange. After the peer's original endpoint/identity details have been authenticated and the handshake is successfully completed (M4 verified), the routers switch to the authenticated real endpoint/session addressing and retire the vIP. It MUST NOT be used for client/server payload packets. If the exchange fails or times out, temporary vIP state MUST be removed and the mapping invalidated.
+- **No indefinite reuse:** A vIP has a finite validity window, bound to its handshake nonce, time bucket/policy, router identities, and session. Expired, retired, replayed, or revoked mappings MUST be rejected. A vIP value MUST NOT be reused to revive an old session.
+- **Interface address changes:** A changed interface IP is not proof of router identity. The neighboring router MUST authenticate the router using Router-CA-backed identity and the handshake/session binding, then validate or refresh the endpoint mapping. A changed endpoint MUST trigger controlled revalidation/rekey or a new handshake; it MUST NOT silently inherit an old vIP mapping or permit plaintext fallback.
+- **Continuing traffic:** Retiring the vIP MUST NOT itself terminate a valid established data session. If the established session or endpoint binding expires or changes, traffic must pause/drop until an authenticated replacement session is available; rekey/re-establishment must be explicit and bounded.
+- **Implementation status:** These are normative design requirements only. The current code has not been shown to implement or pass tests for this complete lifecycle. Required tests include vIP absent from post-M4 payload traffic, cleanup on success/failure/timeout, stale/replayed vIP rejection, interface-IP change with authenticated revalidation, and continuity only through a valid established hop session.
