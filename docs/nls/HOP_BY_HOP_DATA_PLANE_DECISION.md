@@ -51,7 +51,7 @@ The normative SHA-derived vIP input encoding, hash/truncation, address-policy ve
 
 - vIP is a temporary bootstrap address for the authenticated NLH2 M1–M4 exchange only. It is not a carrier for client/server payload and must not be used as the post-handshake data-plane address.
 - “Original data of hop-A” means the peer's authoritative router identity and original endpoint details needed for trust validation; it does not mean application payload.
-- After those details are authenticated and M4 is verified, routers switch to the authenticated real endpoint/session addressing and retire the vIP. Failed or timed-out handshakes clean up temporary state.
+- After those details are authenticated and M4 is verified, routers switch to authenticated endpoint/session addressing and retire the vIP. Failed or timed-out handshakes clean up temporary state.
 - A vIP has finite validity, is bound to the handshake/session context, and must not be reused to revive an expired session. Stale, replayed, retired, or revoked mappings are rejected.
 - Interface-IP changes require authenticated peer revalidation and a controlled endpoint/session update or new handshake. An IP address alone never proves router identity.
 - Retiring a vIP must not silently break an otherwise valid session; if the established session expires or its endpoint binding changes, traffic pauses/drops until a valid replacement session is established. Never fall back to plaintext.
