@@ -39,14 +39,30 @@ def test_control_record_ciphertext_tampering_fails_authentication():
         tamper_receiver.close()
 
 
-def test_control_record_rejects_replay_or_sequence_gap():
+def test_control_record_rejects_replayed_record():
+    """A record accepted at sequence 1 must be rejected when replayed at sequence 2."""
     key = b"K" * 32
     prefix = b"CLNT"
     sender, receiver = socket.socketpair()
     try:
         _send_protected(sender, DATA, key, prefix, 1, {"operation": "lookup"})
-        with pytest.raises(NLSControlError, match="replay or sequence gap"):
-            _recv_protected(receiver, DATA, key, prefix, 2)
+        kind, body = read_frame(receiver)
+
+        # Deliver the captured record to a fresh receiving socket once.
+        replay_sender, replay_receiver = socket.socketpair()
+        try:
+            write_frame(replay_sender, kind, body)
+            assert _recv_protected(replay_receiver, DATA, key, prefix, 1) == {
+                "operation": "lookup"
+            }
+
+            # Replaying the exact same authenticated frame must not satisfy seq=2.
+            write_frame(replay_sender, kind, body)
+            with pytest.raises(NLSControlError, match="replay or sequence gap"):
+                _recv_protected(replay_receiver, DATA, key, prefix, 2)
+        finally:
+            replay_sender.close()
+            replay_receiver.close()
     finally:
         sender.close()
         receiver.close()
