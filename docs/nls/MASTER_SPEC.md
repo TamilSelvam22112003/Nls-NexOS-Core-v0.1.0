@@ -357,3 +357,52 @@ Specification text, test names, and external descriptions MUST use "source-addre
 
 **Status:** The SourceToken data plane is specified but not yet implemented; implementation is planned in Segment 7.
 
+## Architecture Amendment — Hop-by-Hop Data Plane (2026-10-21)
+
+**Decision:** NLS uses hop-by-hop protection. This amendment supersedes any prior statement that transit routers forward an opaque end-to-end NLE2 inner packet without decrypting it. It changes the data-plane forwarding model only; it does not waive the existing Phase 0 or other implementation gates.
+
+### Normative forwarding behavior
+
+For each adjacent pair R_i → R_(i+1), the routers establish an authenticated hop session. R_i protects the packet using its directional session key for R_(i+1). R_(i+1) authenticates and decrypts the hop packet, enforces peer/session binding and replay protection, validates the packet and local routing policy, selects the next hop from the existing routing plane, updates the **NLS hop-level source identity** to R_(i+1), and re-protects the packet using the session for R_(i+2). Return traffic uses independently derived reverse-direction keys and replay state.
+
+The original inner IP packet MUST remain semantically unchanged during transit, including its client source and server destination addresses, unless a separately specified gateway/NAT function is explicitly enabled. Updating the NLS hop-level source identity MUST NOT rewrite the original inner IP source address. This preserves ordinary client/server addressing while identifying the immediate sender on each NLS hop.
+
+### Confidentiality and trust boundary
+
+- The underlay sees the outer next-hop endpoint and packet timing/size. It MUST NOT see the inner IP header or payload on an NLS-protected transit link.
+- Each trusted transit router decrypts the incoming hop packet and therefore can observe the inner IP header and payload during processing. NLS MUST NOT claim that hop-by-hop protection conceals the original client source IP from trusted transit routers.
+- If source identity must also be concealed from transit routers, that is a separate end-to-end privacy requirement and needs an additional end-to-end encrypted origin-identity mechanism; it is not provided by hop-by-hop encryption alone.
+- No plaintext fallback is permitted. Authentication failure, replay, expired/revoked peer, missing next-hop session, malformed packet, or policy denial results in drop and a redacted audit event.
+
+### Cryptographic requirements
+
+Use the authenticated router-to-router handshake and X25519 + HKDF-SHA-256 to derive independent directional hop keys. Use AES-256-GCM for each hop packet, with a unique nonce under each key and the complete canonical NLS header authenticated as associated data. Do not use RSA-OAEP to wrap a fresh data key per packet. Sequence/replay state is scoped to the directional hop session. Re-key or invalidate sessions on peer revocation, certificate expiry, session expiry, or endpoint/identity mismatch.
+
+### vIP is a separate unresolved normative item
+
+The hybrid NLH2 amendment above normatively defines the SHA-derived vIP inputs, byte encoding, hash/truncation, address-policy version, nonce/time-bucket checks, and peer recomputation. Implementation and deterministic validation remain pending; collision handling and lifecycle behavior must be tested. A 128-bit hash output MUST NOT be treated as automatically routable or collision-free. The existing random temporary IPv6 allocator is not evidence that SHA-derived vIP is implemented.
+
+### Required implementation gates
+
+Before protocol code changes are approved:
+1. Reconcile packet wire format and this amendment in both repositories.
+2. Define whether the per-hop protected plaintext is the complete inner IP packet and specify MTU/fragmentation behavior.
+3. Test invalid AEAD tags, replay, wrong peer/session, stale/revoked/expired certificates, malformed headers, absent next-hop sessions, and no-plaintext-fallback behavior.
+4. Demonstrate bidirectional traffic across at least four routers with packet captures showing hop ciphertext changes at every hop and no plaintext on transit links.
+5. Verify OSPF/BGP adjacency, convergence, route preservation, and recovery after session loss.
+6. Pass the existing Phase 0 approval gate and obtain fresh Ubuntu 22.04/24.04 CI evidence on the exact branch heads.
+
+This amendment makes an architecture choice; it does not assert that the design is implemented or validated, and it makes no comparative claim against TLS or IPsec.
+
+
+### vIP bootstrap-only role and lifecycle clarification (2026-10-21)
+
+This clarification resolves the vIP lifecycle wording for the hop-by-hop architecture and supersedes any contradictory statement that the vIP carries post-handshake client/server data.
+
+- **Not a payload carrier:** A vIP is a temporary bootstrap/peer-identity address used for the NLH2 M1–M4 exchange. It does not encode, contain, transport, or replace the client/server payload. Payload is carried only by the separately specified, authenticated NLS data plane.
+- **Purpose of the exchange:** The bootstrap exchange lets the routers obtain and validate the peer's authoritative router identity and original endpoint details, complete the authenticated handshake, and establish the hop session. “Original data of hop-A” means the original router identity/endpoint information needed to authenticate and establish that hop—not application payload.
+- **Expiry condition:** The vIP is valid only for the bounded bootstrap exchange. After the peer's original endpoint/identity details have been authenticated and the handshake is successfully completed (M4 verified), the routers switch to authenticated endpoint/session addressing and retire the vIP. It MUST NOT be used for client/server payload packets. If the exchange fails or times out, temporary vIP state MUST be removed and the mapping invalidated.
+- **No indefinite reuse:** A vIP has a finite validity window, bound to its handshake nonce, time bucket/policy, router identities, and session. Expired, retired, replayed, or revoked mappings MUST be rejected. A vIP value MUST NOT be reused to revive an old session.
+- **Interface-IP changes:** A changed interface IP is not proof of router identity. The neighboring router MUST authenticate the router using Router-CA-backed identity and the handshake/session binding, then validate or refresh the endpoint mapping. A changed endpoint MUST trigger controlled revalidation/rekey or a new handshake; it MUST NOT silently inherit an old vIP mapping or permit plaintext fallback.
+- **Continuing traffic:** Retiring the vIP MUST NOT itself terminate a valid established data session. If the established session or endpoint binding expires or changes, traffic must pause/drop until an authenticated replacement session is available; rekey/re-establishment must be explicit and bounded.
+- **Implementation status:** These are normative design requirements only. The current code has not been shown to implement or pass tests for this complete lifecycle. Required tests include vIP absent from post-M4 payload traffic, cleanup on success/failure/timeout, stale/replayed vIP rejection, interface-IP change with authenticated revalidation, and continuity only through a valid established hop session.
