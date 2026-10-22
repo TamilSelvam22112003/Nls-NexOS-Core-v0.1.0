@@ -355,5 +355,53 @@ Specification text, test names, and external descriptions MUST use "source-addre
 - Vary the SourceToken per packet.
 - Define and validate MTU and ICMPv6 handling for the token source.
 
-**Status:** The SourceToken data plane is specified but not yet implemented; implementation is planned in Segment 7.
+## Segment 8 — Authenticated vIP registry and routing-plane LSDB synchronization
+
+### Purpose
+
+The NLS vIP registry is the authoritative local table mapping each active NLS router identity and originalIP to its current session-scoped vIP/SourceToken binding. It is distinct from the temporary kernel-address allocator: allocator state records which local /128 addresses are assigned and owned, while the registry records authenticated protocol identity, session lifecycle, and reachability metadata.
+
+The implementation MUST keep these state stores separate:
+
+- **Address lease table:** local kernel /128 allocation, ownership, expiry, and cleanup after crash.
+- **NLS vIP binding table:** router_id, originalIP, vIP (handshake-only until M4), directional SourceTokens, session_id, record_seq, authentication state, lifecycle state, expiry, and binding version.
+- **Routing LSDB view:** only authenticated current bindings that have been accepted by the routing-plane synchronizer. A local registry row MUST NOT by itself install a kernel route or be flooded as an OSPF LSA.
+
+### Binding lifecycle and authorization
+
+1. **PENDING:** a candidate vIP may be reserved for one bounded handshake; it is not reachable, not eligible for LSDB origination, and MUST NOT be exported as an established binding.
+2. **ESTABLISHED:** only after full NLH2 M1–M4 validation, fresh authoritative Router-CA lookups, both RDR checks, transcript/signature validation, and key confirmation succeed, atomically publish the session's directional SourceToken rows and the verified peer originalIP. No record may be learned solely from an unauthenticated advertisement.
+3. **OVERLAP:** when rekey succeeds, retain the old session binding for the configured make-before-break overlap interval, while the new ESTABLISHED record wins forwarding resolution. A stale withdrawal for the old session MUST NOT delete the new session's row.
+4. **WITHDRAWN/EXPIRED:** session teardown, revocation, failed trust refresh, expiry, or token-lease cleanup withdraws that exact session's records. Any routing-plane LSA or equivalent advertisement MUST be withdrawn or aged out, and a later session MUST receive a strictly newer per-router record sequence.
+5. **REJECTED:** invalid schema, identity mismatch, sequence rollback, collision, expiry, untrusted channel, or unauthorized route origin MUST fail closed without changing an existing good binding.
+
+### Canonical vIP record
+
+Use a versioned, exact-field schema. The local registry record contains:
+
+`record_version`, `record_type=nls_vip_binding`, `router_id`, `original_ip`,
+`vip`, `source_token`, `send_token`, `session_id`, `record_seq`,
+`state`, `expires_at`, and the authenticated router public-key identity.
+The routing export MUST omit private key material, symmetric keys, nonces, handshake envelopes, and user packet contents. Implementations MUST reject unknown fields at import boundaries. The routing channel's authenticated peer identity MUST match `router_id`; the record body alone MUST NOT establish that identity. Records MUST have a bounded lifetime and monotonically increasing `record_seq` per router/binding authority. A stale record or stale withdrawal MUST NOT replace or remove a newer session.
+
+### LSDB synchronization and originalIP update
+
+After the authenticated vIP registry commits an ESTABLISHED binding, the routing-plane adapter may originate an NLS-specific LSDB object carrying the router identity, originalIP, record sequence, lifecycle state, expiry/age, and session-specific opaque token identifier required by the approved routing design. It MUST NOT put a peer's unverified originalIP into the LSDB.
+
+On an authenticated, accepted change of the peer's authoritative RDR where `wan_endpoints[0]` changes the peer's originalIP, the daemon MUST NOT mutate the originalIP field of an existing session in place. It MUST revalidate the updated Router-CA record, establish or re-establish the NLH2 session using the new originalIP, publish a new session-scoped binding, and withdraw the old binding only when the old session is safely retired. Old and new bindings may coexist only in the explicitly bounded OVERLAP interval. The routing plane then updates its own LSDB from the accepted new binding; it does not learn the new originalIP from the data-plane packet or from an unauthenticated OSPF extension.
+
+### OSPF compatibility boundary
+
+This specification does not authorize injecting private NLS JSON or arbitrary custom payloads into standard OSPFv2/OSPFv3 LSAs. The existing FRRouting/OSPF LSDB may only be modified through an explicitly implemented, versioned and validated routing-plane adapter using a supported FRRouting interface or a separately specified OSPF extension. Until that adapter and interoperability tests exist, `nls/lsdb.py` is the NLS authenticated registry/LSDB view, not evidence that an originalIP is propagated through real OSPF LSAs to every NLS router. Keep the kernel FIB and operator-owned routes unchanged unless a distinct route-installation policy authorizes a specific route.
+
+### Required verification gates
+
+- Unit tests for exact schema, IPv6 canonicalization, identity mismatch, collisions, monotonic sequence, expired and stale update rejection, session-scoped withdrawals, and restart recovery.
+- Lifecycle tests proving PENDING is never exported; M4 success publishes ESTABLISHED; failed M4/trust refresh/revocation withdraws; rekey publishes the new binding before retiring the old one.
+- A multi-router test proving an authenticated originalIP change updates every participating router's LSDB view, with signed/authorized update and withdrawal records.
+- OSPF/FRRouting tests demonstrating actual LSA origination, flooding, update, and withdrawal on the WAN-facing topology. Tests must verify both the protocol LSDB and kernel route table and must distinguish a synchronized metadata binding from an installed FIB route.
+- WAN capture must show only the defined outer addressing and SourceToken payload, with inner original source/destination absent from plaintext; cProfile and throughput evidence must be attached to the exact tested commit.
+- Required tests must pass on Ubuntu 22.04 and 24.04 before this feature is marked complete. If OSPF LSA integration is not implemented, the gate remains BLOCKED, not PASS.
+
+**Status:** The current code has local vIP/SourceToken binding and LSDB export/import primitives. Dedicated authenticated end-to-end vIP/LSDB synchronization and actual OSPF LSA propagation remain unverified until separately implemented and tested.
 
