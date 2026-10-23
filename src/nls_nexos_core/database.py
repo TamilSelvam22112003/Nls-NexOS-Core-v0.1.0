@@ -189,7 +189,8 @@ class Registry:
    if fields:
     assignments=", ".join(f"{name}=?" for name in fields)
     try:
-     con.execute(f"UPDATE routers SET {assignments},updated_at=? WHERE router_id=?",  # nosec B608: assignment column names come only from fixed internal field names; all values are bound parameters
+     # Column names above are derived only from fixed internal field names; values remain bound parameters.
+     con.execute(f"UPDATE routers SET {assignments},updated_at=? WHERE router_id=?",  # nosec B608
                  (*fields.values(),int(__import__("time").time()),router_id))
     except sqlite3.IntegrityError as exc:
      if "UNIQUE constraint failed: routers.original_ip" in str(exc):
