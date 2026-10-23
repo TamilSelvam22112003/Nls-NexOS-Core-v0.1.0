@@ -1,0 +1,60 @@
+name: NexOS Core Security Tool Audit
+
+on:
+  push:
+    branches: ["security/pentest-audit-2026-10"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python-security:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project and static security scanners
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m pip install --disable-pip-version-check bandit semgrep pip-audit
+      - name: Bandit Python security scan
+        run: bandit -r src tests -ll -ii
+      - name: Semgrep security rules
+        run: semgrep scan --config p/security-audit --config p/secrets --error --metrics=off src tests
+      - name: Dependency vulnerability audit
+        run: pip-audit .
+  secrets-and-filesystem:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks repository and history scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Trivy filesystem vulnerability, misconfiguration and secret scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+  codeql:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: python
+      - uses: github/codeql-action/autobuild@v3
+      - uses: github/codeql-action/analyze@v3
