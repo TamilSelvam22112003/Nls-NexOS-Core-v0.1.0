@@ -50,7 +50,11 @@ def handle_control_request(message: dict, authority, registry, settings,
         return {"type": "health-result", "ok": True, "control_id": settings.control_id,
                 "protocol_version": 1}
     if action == "enroll":
-        if authenticated_router and message.get("request", {}).get("router_id") != authenticated_router["router_id"]:
+        request = message.get("request")
+        if authenticated_router and (
+            not isinstance(request, dict)
+            or request.get("router_id") != authenticated_router["router_id"]
+        ):
             return {"type": "error", "code": "not-authorized", "message": "router identity mismatch"}
         try:
             req = EnrollmentRequest.model_validate(message.get("request"))

@@ -29,6 +29,7 @@ class Settings:
   replay,skew,timeout,rotation,version=(int(srv.get(k,d)) for k,d in (("replay_window",64),("max_clock_skew_seconds",120),("session_timeout_seconds",300),("key_rotation_seconds",3600),("policy_version",1)))
   if not 1<=port<=65535 or not 1<=days<=397 or not 1024<=size<=1000000:raise ValueError("invalid server/enrollment settings")
   if not 1<=replay<=4096 or not 30<=skew<=600 or not 30<=timeout<=86400 or not 60<=rotation<=604800:raise ValueError("invalid NLS security policy")
+  if version != 1:raise ValueError("unsupported policy_version")
   control_id=str(srv.get("control_id","nls-router-ca"))
   if not control_id or len(control_id)>128:raise ValueError("control_id must be 1..128 characters")
   return cls(str(srv.get("host","::")),port,Path(db.get("path","/var/lib/nls-nexos-core/router-registry.sqlite3")),Path(pki.get("ca_certificate","/etc/nls-nexos-core/pki/ca-root.crt")),Path(pki.get("ca_private_key","/etc/nls-nexos-core/pki/ca-signing.key")),Path(pki.get("issued_cert_dir","/var/lib/nls-nexos-core/issued")),Path(enr.get("token_file","/etc/nls-nexos-core/enrollment-token")),days,size,Path(srv.get("identity_key","/var/lib/nls-nexos-core/identity/control-ed25519.key")),control_id,version,replay,skew,timeout,rotation)

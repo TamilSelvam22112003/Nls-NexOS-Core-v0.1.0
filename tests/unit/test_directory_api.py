@@ -238,3 +238,21 @@ def test_register_cannot_reactivate_revoked_router(tmp_path, monkeypatch):
             "SELECT event,detail FROM audit_log WHERE event='ROUTER_REGISTER_DENIED'"
         ).fetchone()
     assert row and "reactivated" in row["detail"]
+
+
+
+def test_enrollment_rejects_malformed_request_objects_without_attribute_error(tmp_path):
+    registry = Registry(tmp_path / "malformed-enrollment.sqlite3")
+    for request in (None, [], "not-an-object"):
+        response = handle_control_request(
+            {"type": "enroll", "request": request}, None, registry, _settings(), None, None,
+        )
+        assert response["type"] == "error"
+        assert response["code"] == "enrollment-denied"
+
+        authenticated_response = handle_control_request(
+            {"type": "enroll", "request": request}, None, registry, _settings(),
+            {"router_id": "router-a", "serial_number": "serial-a"}, None,
+        )
+        assert authenticated_response["type"] == "error"
+        assert authenticated_response["code"] == "not-authorized"
