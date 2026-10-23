@@ -24,8 +24,10 @@ jobs:
       - name: Bandit Python security scan
         run: bandit -r src tests -ll -ii
       - name: Semgrep security rules
+        if: always()
         run: semgrep scan --config p/security-audit --config p/secrets --error --metrics=off src tests
       - name: Dependency vulnerability audit
+        if: always()
         run: pip-audit .
   secrets-and-filesystem:
     runs-on: ubuntu-24.04
