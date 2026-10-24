@@ -167,3 +167,30 @@ def test_router_enrolls_and_syncs_over_nls_control_v1(tmp_path):
         server.stop()
         worker.join(timeout=3)
         assert not worker.is_alive()
+
+
+
+def _master_spec_section(spec: str, heading: str, next_heading: str) -> str:
+    start = spec.index(heading)
+    end = spec.index(next_heading, start + len(heading))
+    return spec[start:end].strip()
+
+
+@pytest.mark.integration
+def test_master_spec_wire_sections_match_across_router_and_core_repositories():
+    """Prevent drift in the normative SourceToken wire format and metadata modes."""
+    core_spec_path = ROOT / "docs" / "nls" / "MASTER_SPEC.md"
+    router_spec_path = NLSXNETOS / "docs" / "nls" / "MASTER_SPEC.md"
+    assert core_spec_path.is_file(), f"Core master spec missing: {core_spec_path}"
+    assert router_spec_path.is_file(), f"NetOS master spec missing: {router_spec_path}"
+    core_spec = core_spec_path.read_text(encoding="utf-8")
+    router_spec = router_spec_path.read_text(encoding="utf-8")
+    sections = (
+        ("#### B.2 SourceToken construction and selection", "#### B.3 Versioned data record"),
+        ("#### B.3 Versioned data record", "#### B.4 Datagram demultiplexing"),
+        ("#### B.4 Datagram demultiplexing", "#### B.5 Legacy NLE2 header"),
+    )
+    for start_heading, end_heading in sections:
+        assert _master_spec_section(core_spec, start_heading, end_heading) == _master_spec_section(
+            router_spec, start_heading, end_heading
+        ), f"NLS wire-spec drift between Core and NetOS: {start_heading}"

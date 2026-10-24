@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: TamilSelvam22112003/NlsxNetOS-v0.1.0
-          ref: feat/nls-v1
+          ref: ${{ github.ref_name }}
           path: nlsxnetos
       - uses: actions/setup-python@v5
         with:

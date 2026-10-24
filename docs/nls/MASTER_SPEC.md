@@ -189,6 +189,7 @@ This amendment supersedes only conflicting statements in earlier parts of this s
 - the STEP A S2 M1 field list, and any interpretation that M1 carries S's certificate, originalIP, or signed RDR;
 - the hybrid NLH2 amendment's M1 contents and field names;
 - STEP A S5 endpoint-switch/data-plane wire format and the hybrid vIP lifecycle, but only for post-M4 data packet addressing and format.
+- the SourceToken data-record framing and metadata-protection-mode requirements defined in B.3 and B.4.
 
 Existing M2, M3 and M4 message contents remain unchanged except for the M3 disclosure timing stated below. The vIP retirement rule and VIP_AFTER_SWITCH rejection semantics remain in force. The pinned policy-v1 table/hash, ordered wan_endpoints, originalIP requirements, replay/freshness rules, signatures, transcript checks, key schedule, fail-closed behavior and the existing NLH2 handshake framing remain the security base unless this amendment explicitly says otherwise.
 
@@ -236,43 +237,55 @@ For traffic B to A, reverse A and B. The source port is always the sender's own 
 
 #### B.2 SourceToken construction and selection
 
-SourceToken is a 16-byte value produced by one AES-256 block-cipher operation on the sender's packed 16-byte IPv6 originalIP. For each direction and each attempt, derive a 32-byte key as:
+SourceToken is a 16-byte pseudonymous routing identifier derived from the sender's packed 16-byte IPv6 originalIP. It is not reversible ciphertext: confidentiality of the actual inner IP header is provided by the AES-256-GCM data-payload encryption in B.3. For each direction and each attempt, derive a 32-byte key as:
 
 - input key material: the existing session_secret (the NLH2 X25519 shared value);
 - salt: the existing handshake salt, SHA-256(H3 || nonce_s || nonce_d);
 - info: the direction-specific ASCII label NLS-SourceToken-v1/A-to-B or NLS-SourceToken-v1/B-to-A, concatenated with uint32_be(attempt);
 - KDF: the existing HKDF-SHA256 construction.
 
-Encrypt exactly one 16-byte block under the derived AES-256 key. This operation uses no IV, padding, chaining mode, or multi-block format.
+Compute HMAC-SHA256 using the derived key over the domain-separated message `NLS-SourceToken-candidate-v1/` concatenated with the sender's packed 16-byte IPv6 originalIP. The candidate is the first 16 bytes of the HMAC digest. This is a keyed pseudorandom-function mapping, not encryption of a recoverable address. No IV, padding, or block-cipher mode is used. Both session endpoints MUST implement the same derivation; a token mismatch fails closed.
 
 Attempts are uint32 big-endian values 0 through 255 inclusive. For each attempt, a candidate MUST be rejected and redrawn at the next attempt if it is invalid under the same selected, versioned address-policy mechanism used for vIP selection, equals this session's retired vIP, or equals either router's originalIP. If no candidate qualifies within attempts 0 through 255, the session MUST fail closed.
 
 The receiver precomputes expected inbound SourceTokens and performs an exact-match lookup on the outer IPv6 source address. A collision is scoped to the receiving router's local active/pending token table. A collision MUST NOT overwrite an existing entry; a detected local table collision fails the session closed. The SourceToken is constant for each direction throughout a session and changes when the session is rekeyed. It does not vary per packet; per-packet SourceToken variation is out of scope.
 
-#### B.3 Data payload, nonce and authentication
+#### B.3 Versioned data record, metadata modes, nonce and authentication
 
-The UDP payload is:
+Every data-plane record uses the explicit NLD2 framing below. The receiver MUST reject unknown magic, versions, mode values, malformed lengths, and mode mismatches. There is no fallback to the earlier counter-first SourceToken payload or legacy NLE2 format.
 
-  counter (uint64 big-endian) || AEAD ciphertext || 16-byte AEAD tag
+Common header:
+```
+magic "NLD2" (4 bytes) || version=2 (1 byte) || mode (1 byte) ||
+counter (uint64 big-endian) || mode-specific visible metadata
+```
 
-The AEAD plaintext is:
+The header is followed by AES-256-GCM ciphertext and a 16-byte tag. The encrypted plaintext is `message_type (1 byte) || complete original IP packet`. Message type 0 means a tunneled IP packet. Nonzero values are reserved and MUST NOT be emitted; after successful authentication, an unknown/reserved type is silently dropped.
 
-  message_type (1 byte) || message_body
+The configured `metadata_mode` is an explicit local policy with these exact values:
+- `source-only` (wire mode 1): conceal the original source address, while intentionally exposing the original inner destination address in a clear, authenticated 17-byte field. The field is `IP version (1 byte: 4 or 6) || address slot (16 bytes)`. For IPv4, the address slot is 12 zero bytes followed by the 4-byte IPv4 destination; for IPv6 it is the full 16-byte destination. The receiver MUST authenticate the record, decrypt the complete inner packet, and reject it unless the clear destination exactly matches the decrypted packet's destination.
+- `source-destination` (wire mode 2): expose no inner destination metadata. Both original source and original destination IP addresses remain inside the encrypted inner packet.
 
-Message type 0 means a tunneled IP packet; the message body MUST be the complete original client/server IP packet. The inner packet's source and destination IP addresses are carried only inside the ciphertext. All nonzero message-type values remain unassigned/reserved until their control semantics are explicitly specified. A sender MUST NOT emit an unassigned type. A receiver MUST authenticate the record before acting on the message type, and MUST silently drop an unknown or reserved type after successful authentication. The type byte is encrypted, not exposed as an unencrypted wire field; its presence increases the ciphertext/plaintext content length by one byte.
+Configuration: `nls.metadata_mode` is required for the NLD2 data plane and accepts exactly `source-only` or `source-destination`. The default for new installations is `source-destination`; an invalid value MUST reject configuration. The setting is static local policy, not per-packet negotiation. Both endpoints of a session MUST use the same value. This NLD2 framing is a deliberate wire-format version change: peers using the prior counter-first SourceToken payload are incompatible and MUST be upgraded together; implementations MUST NOT fall back automatically to the prior format.
 
-The existing NLH2 directional AEAD keys and four-byte directional IV prefixes are used. The 12-byte AES-256-GCM nonce is the four-byte directional IV prefix concatenated with the uint64 big-endian counter. The 40-byte associated data is exactly: 16-byte outer IPv6 source || 16-byte outer IPv6 destination || 8-byte counter. UDP source and destination ports are not included in the associated data.
+Both modes encrypt the complete inner IP packet with AES-256-GCM. Mode 1 intentionally leaks the inner destination IP and must not be described as destination-confidential. Mode 2 hides the inner endpoint source and destination from observers on the underlay, but not the outer source token, destination-router WAN address, UDP ports, packet sizes, timing, or traffic patterns. The outer destination is the authorized destination router's `originalIP`; intermediate underlay routers do not need the inner destination to forward the protected record.
 
-The sender's counter starts at zero and increases strictly for each data-plane record in that direction. It MUST NOT wrap. The receiver uses the existing default 128-record replay window, permits authenticated reordering within that window, rejects duplicates and records too old for the window, and updates replay state only after successful AEAD authentication. Authentication failure MUST NOT advance replay state.
+The receiver MUST require the record's mode byte to equal its configured `metadata_mode`; a mismatch fails closed. The selected mode is policy, not opportunistically negotiated per packet. Both peers MUST be configured consistently. The mode byte and all visible metadata are authenticated as associated data, so an attacker cannot downgrade or rewrite the mode without AEAD failure.
 
-The existing NLH2 rekey policy remains: rekey at 2^32 packets in either direction or one hour, whichever occurs first, using make-before-break. Rekey establishes new directional keys, nonce prefixes and SourceTokens. A counter MUST NOT wrap; if rekey cannot complete before the hard limit, the session fails closed.
+The 12-byte AES-256-GCM nonce is the four-byte directional IV prefix concatenated with the uint64 big-endian counter. Associated data is exactly:
+`outer IPv6 source (16 bytes) || outer IPv6 destination (16 bytes) || complete clear NLD2 header`.
+UDP source and destination ports are not included in the associated data.
+
+The sender's counter starts at zero and increases strictly for each record in that direction. It MUST NOT wrap; the existing hard rekey limit remains 2^32 records. The receiver uses the configured replay window (default 128), permits authenticated reordering within the window, rejects duplicates and records too old for the window, and updates replay state only after successful AEAD authentication. Authentication failure MUST NOT advance replay state.
+
+The existing NLH2 rekey policy remains: rekey at 2^32 packets in either direction or one hour, whichever occurs first, using make-before-break. Rekey establishes new directional keys, nonce prefixes and SourceTokens. If rekey cannot complete before the hard limit, the session fails closed.
 
 #### B.4 Datagram demultiplexing
 
 Demultiplexing MUST follow this order:
-1. An exact outer-source match in the receiver's active/pending SourceToken table selects the NLS data path. The receiver then performs AEAD, counter, replay-window and message-type checks.
+1. An exact outer-source match in the receiver's active/pending SourceToken table selects the NLS data path. The receiver parses only the fixed NLD2 header needed for bounds checking and mode enforcement, then authenticates the complete clear header and ciphertext before acting on the counter, visible destination, or encrypted message type.
 2. If there is no exact SourceToken match, the datagram may enter the NLH2 handshake path only when it passes the existing NLH2 framing and pre-checks.
-3. All other datagrams are dropped silently. There MUST be no fallback to the retired cleartext handshake or legacy data formats.
+3. All other datagrams are dropped silently. There MUST be no fallback to the retired cleartext handshake, counter-first SourceToken payloads, or legacy NLE2 data formats.
 
 The receiver MUST NOT use the observed UDP source port in this decision. SourceToken matching precedes handshake fallback. Existing vIP retirement and VIP_AFTER_SWITCH rejection semantics remain; retired-vIP traffic receives no protocol response, though a local diagnostic may record the defined VIP_AFTER_SWITCH reason.
 
@@ -292,7 +305,7 @@ The effects of replacing the legacy header are:
 
 #### B.6 Security and operational limitations
 
-This mechanism provides source-address confidentiality, not endpoint-identity anonymity or traffic-flow anonymity. See “Goals and non-goals of the SourceToken data plane (version 1)” for the observer model and explicit limitations. In each direction, the actual destination router originalIP remains visible as the outer IPv6 destination. A per-direction SourceToken is stable within the session and can correlate packets from that session.
+Metadata guarantees depend on the configured mode. `source-only` hides the original inner source but deliberately exposes the original inner destination in the authenticated NLD2 header. `source-destination` encrypts both original inner endpoint addresses. In both modes, the actual destination router `originalIP` remains visible as the outer IPv6 destination, and a per-direction SourceToken is stable within a session and can correlate packets from that session. Neither mode provides endpoint-identity anonymity or traffic-flow anonymity.
 
 The sender must be able to emit UDP packets with the SourceToken as the outer IPv6 source. Implementations may require a temporary /128 address, raw sockets, or carefully scoped packet-manipulation rules; these must be removed at session termination. The implementation approach and cleanup tests are deferred to the applicable implementation workstream.
 
@@ -308,6 +321,10 @@ These are specification requirements, not a claim that tests have been implement
 - Candidates equal to the retired vIP or either router's originalIP are redrawn; address-policy rejection is honored; exhaustion of attempts 0 through 255 fails closed.
 - Receiving-router local active/pending token collisions do not overwrite an entry and fail the session closed.
 - Exact SourceToken match selects the data path; unmatched packets use only the existing NLH2 pre-check path or are silently dropped.
+- Mode 1 exposes only the specified inner destination metadata; its authenticated value must match the decrypted inner destination for IPv4 and IPv6.
+- Mode 2 contains no visible inner destination field; packet captures show both inner endpoint addresses only inside ciphertext.
+- Unknown NLD2 versions, unknown mode values, mode/config mismatch, malformed visible-destination encodings, and mode downgrade/tampering are rejected without advancing replay state.
+- Both peers configured for the same mode complete bidirectional forwarding; mismatched mode configuration fails closed without legacy-format fallback.
 - Changing only the observed UDP source port does not change protocol decisions; outbound source port is the sender's advertised wan_endpoints[0] port.
 - Type 0 successfully transports an inner IP packet. Unassigned message types cause no control action and are silently dropped after authentication.
 - Tampering with outer source, outer destination or counter causes AEAD authentication failure.

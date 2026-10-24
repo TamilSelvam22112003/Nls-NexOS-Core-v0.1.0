@@ -1,3 +1,14 @@
+## Unreleased — Metadata protection modes specification (2026-10-24)
+
+- Specified versioned NLD2 data framing and explicit `source-only` / `source-destination` policies with authenticated visible-destination semantics.
+- Specification only: runtime implementation and tests are pending; this entry does not claim either mode is implemented.
+
+## Unreleased — SourceToken specification reconciliation (2026-10-24)
+
+- Added a cross-repository integration assertion that the NetOS and Core master specification files are byte-identical, preventing future wire-format drift.
+- Synchronized the Core master specification with the existing NetOS HMAC-SHA-256 SourceToken derivation, removing the conflicting AES block-encryption description.
+- No runtime code or wire behavior changed. Cross-repository specification consistency must be rechecked by the dedicated validation gate.
+
 # Changelog
 
 ## Unreleased — Prompt 2
