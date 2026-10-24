@@ -1,3 +1,8 @@
+## Unreleased — SourceToken specification reconciliation (2026-10-24)
+
+- Synchronized the Core master specification with the existing NetOS HMAC-SHA-256 SourceToken derivation, removing the conflicting AES block-encryption description.
+- No runtime code or wire behavior changed. Cross-repository specification consistency must be rechecked by the dedicated validation gate.
+
 # Changelog
 
 ## Unreleased — Prompt 2
