@@ -236,14 +236,14 @@ For traffic B to A, reverse A and B. The source port is always the sender's own 
 
 #### B.2 SourceToken construction and selection
 
-SourceToken is a 16-byte value produced by one AES-256 block-cipher operation on the sender's packed 16-byte IPv6 originalIP. For each direction and each attempt, derive a 32-byte key as:
+SourceToken is a 16-byte pseudonymous routing identifier derived from the sender's packed 16-byte IPv6 originalIP. It is not reversible ciphertext: confidentiality of the actual inner IP header is provided by the AES-256-GCM data-payload encryption in B.3. For each direction and each attempt, derive a 32-byte key as:
 
 - input key material: the existing session_secret (the NLH2 X25519 shared value);
 - salt: the existing handshake salt, SHA-256(H3 || nonce_s || nonce_d);
 - info: the direction-specific ASCII label NLS-SourceToken-v1/A-to-B or NLS-SourceToken-v1/B-to-A, concatenated with uint32_be(attempt);
 - KDF: the existing HKDF-SHA256 construction.
 
-Encrypt exactly one 16-byte block under the derived AES-256 key. This operation uses no IV, padding, chaining mode, or multi-block format.
+Compute HMAC-SHA256 using the derived key over the domain-separated message `NLS-SourceToken-candidate-v1/` concatenated with the sender's packed 16-byte IPv6 originalIP. The candidate is the first 16 bytes of the HMAC digest. This is a keyed pseudorandom-function mapping, not encryption of a recoverable address. No IV, padding, or block-cipher mode is used. Both session endpoints MUST implement the same derivation; a token mismatch fails closed.
 
 Attempts are uint32 big-endian values 0 through 255 inclusive. For each attempt, a candidate MUST be rejected and redrawn at the next attempt if it is invalid under the same selected, versioned address-policy mechanism used for vIP selection, equals this session's retired vIP, or equals either router's originalIP. If no candidate qualifies within attempts 0 through 255, the session MUST fail closed.
 

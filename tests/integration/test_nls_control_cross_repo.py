@@ -167,3 +167,16 @@ def test_router_enrolls_and_syncs_over_nls_control_v1(tmp_path):
         server.stop()
         worker.join(timeout=3)
         assert not worker.is_alive()
+
+
+@pytest.mark.integration
+def test_master_spec_is_identical_across_router_and_core_repositories():
+    """Prevent cross-repository wire-spec drift, including SourceToken derivation."""
+    core_spec = ROOT / "docs" / "nls" / "MASTER_SPEC.md"
+    router_spec = NLSXNETOS / "docs" / "nls" / "MASTER_SPEC.md"
+    assert core_spec.is_file(), f"Core master spec missing: {core_spec}"
+    assert router_spec.is_file(), f"NetOS master spec missing: {router_spec}"
+    assert core_spec.read_bytes() == router_spec.read_bytes(), (
+        "NLS master specification drift: synchronize both repositories before "
+        "changing a wire-format or cryptographic derivation requirement"
+    )
