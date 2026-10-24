@@ -10,6 +10,29 @@ permissions:
   contents: read
 
 jobs:
+  protocol-negative-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install NexOS Core and test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m pip install --disable-pip-version-check pytest
+      - name: Test malformed enrollment and trust-boundary inputs
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=10s 10m python -m pytest -q -vv tests/security 2>&1 | tee "$RUNNER_TEMP/nexos-core-security-tests.log"
+      - name: Upload Core security test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexos-core-security-test-log-${{ github.sha }}
+          path: ${{ runner.temp }}/nexos-core-security-tests.log
+          if-no-files-found: warn
   python-security:
     runs-on: ubuntu-24.04
     steps:
