@@ -13,3 +13,10 @@
 - The minimal safe resolution is to synchronize the Core specification to the already-implemented NetOS construction. This is a specification correction only; it does not change runtime behavior or introduce a new cryptographic primitive.
 - SourceToken is a pseudonymous routing identifier, not reversible encryption. Inner-packet confidentiality is provided by the separately specified AES-256-GCM payload protection.
 - This reconciliation establishes implementation/spec consistency, not independent cryptographic approval. Any future derivation change must be explicitly versioned and tested across both peers; silent algorithm substitution is prohibited.
+
+
+## 2026-10-24 — Metadata mode specification gate (implementation pending)
+
+- The master specification now defines versioned NLD2 data records and explicit `source-only` and `source-destination` policies. The stronger mode conceals both inner endpoint addresses; the source-only mode intentionally exposes the inner destination in authenticated clear metadata.
+- The current runtime still uses the prior counter-first SourceToken payload and has no `metadata_mode` configuration. Therefore, these new requirements are NOT IMPLEMENTED in this commit and this branch is not yet a runnable release for NLD2. Runtime changes must follow in a separate implementation gate with regression tests and exact-head CI.
+- The NLD2 framing change is intentionally versioned and forbids automatic fallback. Both routers must be upgraded together before enabling it.
