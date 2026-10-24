@@ -1,3 +1,8 @@
+## Unreleased — NLD2 cross-repository validation (2026-10-24)
+
+- The matching NetOS implementation branch now carries NLD2 data framing and metadata-mode enforcement. Core runtime code is unchanged; this commit triggers the Core cross-repository integration suite against the matching NetOS branch and verifies the normative wire-spec sections remain synchronized.
+- Result is pending this commit's CI and does not imply that the full router network lab has passed.
+
 ## Unreleased — Metadata protection modes specification (2026-10-24)
 
 - Specified versioned NLD2 data framing and explicit `source-only` / `source-destination` policies with authenticated visible-destination semantics.
