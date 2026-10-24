@@ -27,5 +27,5 @@
 
 ## 2026-10-24 — Paired NLD2 implementation validation
 
-- Trigger the cross-repository control-protocol and normative-spec compatibility suite against NetOS implementation head `38317d21da7c6d85577886f9180b7385b37cd386`. Core runtime remains unchanged by the data-plane mode implementation.
-- This entry records the validation target, not a pass claim; use this commit's Core CI results for the outcome.
+- Trigger the cross-repository control-protocol and normative-spec compatibility suite against NetOS implementation head `d9d0ee5ecfd34e62bb55a53eb2a81a92cb76e841`. Core runtime remains unchanged by the data-plane mode implementation.
+- The paired NetOS head also rate-limits persistent Trust Table expiry to a 250 ms cadence and retains NLD2 mode/replay/MTU regression tests. This entry records the validation target, not a pass claim; use this commit's Core CI results for the outcome.
