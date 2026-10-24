@@ -23,3 +23,9 @@
 - Added canonical-CBOR signed RDRs, nonce-bound lookup, signed directory-sync bundles, heartbeat directory sequence/revocation state, and per-router rate limiting.
 - Added repeatable operator-owned WAN endpoint, gateway IP and prefix registration flags, router-wide revocation, and signed offline directory export.
 - Updated API/proto schemas, traceability and security documentation. Prompt 2 CA/client test gate passed on Ubuntu 22.04 and 24.04 in CI run 38861558053; cross-repo integration passed with 12 datetime/cryptography deprecation warnings per platform.
+
+
+## 2026-10-24 — Paired NLD2 implementation validation
+
+- Trigger the cross-repository control-protocol and normative-spec compatibility suite against NetOS implementation head `38317d21da7c6d85577886f9180b7385b37cd386`. Core runtime remains unchanged by the data-plane mode implementation.
+- This entry records the validation target, not a pass claim; use this commit's Core CI results for the outcome.
