@@ -20,7 +20,7 @@ The shared specification requires a deterministic SHA-512-derived vIP with signe
 
 The responder activates after sending M4 but has no proof that the initiator received it. This handshake lifecycle issue remains unresolved.
 
-**Implemented connection-control mitigation:** Core commit d4fd92b adds a nonblocking global cap of 128 accepted TCP control connections. The worker always returns its admission slot in a `finally` block; rejected connections are closed. Exact-head CI run 40166111961 passed on Ubuntu 22.04 and 24.04.
+**Implemented connection-control mitigation:** Core commits d4fd92b and 725f9c7 add a nonblocking global cap of 128 accepted TCP control connections and a 15-second unauthenticated handshake timeout. The worker always returns its admission slot in a `finally` block; rejected connections are closed. Authenticated application sessions use a 90-second idle timeout. Exact-head CI run 40166718326 passed on Ubuntu 22.04 and 24.04.
 
 **Remaining:** specify and test bounded M4 retransmission/recovery and a consistent activation rule. Do not treat successful UDP `sendto` as proof that the initiator received and accepted M4.
 
