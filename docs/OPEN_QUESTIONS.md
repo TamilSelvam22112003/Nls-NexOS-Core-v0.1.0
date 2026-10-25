@@ -18,9 +18,11 @@ The shared specification requires a deterministic SHA-512-derived vIP with signe
 
 ## 2026-10-25 — M4 loss and connection admission
 
-The responder activates after sending M4 but has no proof that the initiator received it. Separately, the Core TCP listener starts a thread for each accepted connection even though lookup operations have their own rate and concurrency caps.
+The responder activates after sending M4 but has no proof that the initiator received it. This handshake lifecycle issue remains unresolved.
 
-**Safe interpretation:** specify and test bounded M4 retransmission/recovery and add a global connection admission/idle-connection limit. Do not treat successful `sendto` or successful TCP accept as authenticated session completion.
+**Implemented connection-control mitigation:** Core commit d4fd92b adds a nonblocking global cap of 128 accepted TCP control connections. The worker always returns its admission slot in a `finally` block; rejected connections are closed. Exact-head CI run 40166111961 passed on Ubuntu 22.04 and 24.04.
+
+**Remaining:** specify and test bounded M4 retransmission/recovery and a consistent activation rule. Do not treat successful UDP `sendto` as proof that the initiator received and accepted M4.
 
 ## 2026-10-25 — Exact RDR schema and NLD2 rollout
 
