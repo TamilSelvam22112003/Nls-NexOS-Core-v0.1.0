@@ -22,6 +22,8 @@ LOG = logging.getLogger("nls-nexos-core.control")
 
 
 class NLSControlServer:
+    MAX_CONCURRENT_CONNECTIONS = 128
+
     def __init__(self, settings, registry: Registry, authority, control_identity_key):
         self.settings = settings
         self.registry = registry
@@ -37,6 +39,8 @@ class NLSControlServer:
         self.max_concurrent_lookups_per_router = 4
         self.max_concurrent_lookups_total = 64
         self._stopping = threading.Event()
+        # Bound all TCP control sessions, including unauthenticated handshakes and idle clients.
+        self._connection_slots = threading.BoundedSemaphore(self.MAX_CONCURRENT_CONNECTIONS)
 
     def _fresh_nonce(self, nonce: str) -> bool:
         now = time.monotonic()
@@ -221,6 +225,13 @@ class NLSControlServer:
                 except OSError:
                     pass
 
+    def _handle_client_with_slot(self, conn: socket.socket, address) -> None:
+        """Run one admitted connection and always return its global admission slot."""
+        try:
+            self._handle_client(conn, address)
+        finally:
+            self._connection_slots.release()
+
     def serve_forever(self) -> None:
         host = self.settings.host
         try:
@@ -242,7 +253,27 @@ class NLSControlServer:
                     conn, address = listener.accept()
                 except socket.timeout:
                     continue
-                threading.Thread(target=self._handle_client, args=(conn, address), daemon=True).start()
+                if not self._connection_slots.acquire(blocking=False):
+                    LOG.warning("NLS control connection rejected: global connection cap reached")
+                    try:
+                        conn.close()
+                    except OSError:
+                        pass
+                    continue
+                worker = threading.Thread(
+                    target=self._handle_client_with_slot,
+                    args=(conn, address),
+                    daemon=True,
+                )
+                try:
+                    worker.start()
+                except Exception:
+                    self._connection_slots.release()
+                    try:
+                        conn.close()
+                    except OSError:
+                        pass
+                    raise
         finally:
             listener.close()
 
