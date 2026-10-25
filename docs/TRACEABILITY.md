@@ -29,3 +29,14 @@ No full protocol stage S1–S5 is marked complete in Prompt 2. Only the explicit
 - Signed canonical-CBOR RDR/bundle and freshness: `src/nls_nexos_core/directory.py:signed_rdr/signed_directory_bundle`; signature tests in `tests/unit/test_directory.py`.
 - Lookup, directory-sync, heartbeat sequence/revocation state and per-router rate limiting: `api.py:handle_control_request`, `control.py:NLSControlServer._dispatch`; cross-repo integration test is extended.
 - Real CI output: unit/security suites `27 passed in 3.40s` (Ubuntu 22.04) and `27 passed in 1.98s` (Ubuntu 24.04). Cross-repository integration: `1 passed, 12 warnings in 2.42s` (Ubuntu 22.04) and `1 passed, 12 warnings in 1.69s` (Ubuntu 24.04). See [CI run 38861558053](https://github.com/TamilSelvam22112003/Nls-NexOS-Core-v0.1.0/actions/runs/38861558053). The 12 warnings are existing datetime/cryptography deprecations; they are recorded for Prompt 5.
+
+
+## 2026-10-25 audit delta
+
+The review of the current `feat/nls-v1` heads found that Core directory lookup has caller-certificate/status checks, auditing, per-router rate limiting, and per-router/global concurrent-lookup caps. The separate listener-level connection resource bound remains open.
+
+Cross-repository control-protocol compatibility and Core control integration passed in CI run `40091955351` on Ubuntu 22.04 and 24.04. This result applies to NLSC only; it does not prove the router handshake or data-plane wire format conforms to the current master spec.
+
+The shared spec blob matches across both `feat/nls-v1` branches. NetOS `main` has a different, newer `docs/nls/MASTER_SPEC.md` blob and must not be merged into the target branch without a reviewed spec synchronization decision.
+
+Current highest-priority end-to-end gaps are: amended deterministic vIP/M1 fields; NLD2 data-plane framing and metadata modes; strict unknown-field rejection for RDR v2; M4-loss recovery; connection-level DoS bounds; and actual OSPF/OSPFv3 LSA propagation evidence. See `docs/nls/IMPLEMENTATION_AUDIT_2026-10-25.md` for the detailed review.
