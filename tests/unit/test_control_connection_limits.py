@@ -26,3 +26,37 @@ def test_control_connection_slot_is_released_when_handler_raises(monkeypatch):
         server._handle_client_with_slot(object(), ("127.0.0.1", 12345))
     assert server._connection_slots.acquire(blocking=False)
     server._connection_slots.release()
+
+
+def test_control_handshake_timeout_is_shorter_than_authenticated_idle_timeout(monkeypatch):
+    import socket
+    from types import SimpleNamespace
+
+    server = NLSControlServer(
+        SimpleNamespace(control_id="test-ca", max_clock_skew_seconds=120),
+        None, None, None,
+    )
+    timeouts = []
+
+    class FakeConn:
+        def settimeout(self, value):
+            timeouts.append(value)
+
+    class FakeChannel:
+        def recv(self):
+            raise socket.timeout()
+
+        def close(self):
+            pass
+
+    def fake_handshake(conn, *_args, **_kwargs):
+        assert timeouts == [server.HANDSHAKE_TIMEOUT_SECONDS]
+        return FakeChannel(), {"router_id": "unidentified"}, None
+
+    monkeypatch.setattr("nls_nexos_core.control.server_handshake", fake_handshake)
+    server._handle_client(FakeConn(), ("127.0.0.1", 12345))
+    assert timeouts == [
+        server.HANDSHAKE_TIMEOUT_SECONDS,
+        server.IDLE_TIMEOUT_SECONDS,
+    ]
+    assert server.HANDSHAKE_TIMEOUT_SECONDS < server.IDLE_TIMEOUT_SECONDS
