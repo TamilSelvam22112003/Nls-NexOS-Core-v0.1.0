@@ -1,0 +1,49 @@
+{
+  "schema": "nls-vip-derivation-v1",
+  "purpose": "Deterministic byte-encoding and SHA-512 derivation conformance vector. Synthetic certificate/key byte strings are used only to test derivation; they are not valid credentials and MUST NOT be used for authentication.",
+  "spec_baseline": "docs/nls/MASTER_SPEC.md at docs/stage3-spec-freeze",
+  "encoding": "For every ordered field: uint32_be(length(field_bytes)) || field_bytes. SHA-512 over the concatenation. Candidate IPv6 address is the first 16 digest bytes in network byte order.",
+  "fields": {
+    "domain_label_ascii": "NLS-vIP-v1",
+    "destination_originalIP": "2606:4700:4700::1111",
+    "destination_originalIP_packed_hex": "26064700470000000000000000001111",
+    "destination_certificate_der_hex": "3082010a0203010203",
+    "destination_ed25519_spki_der_hex": "302a300506032b65700321001111111111111111111111111111111111111111111111111111111111111111",
+    "source_originalIP": "2001:4860:4860::8888",
+    "source_originalIP_packed_hex": "20014860486000000000000000008888",
+    "source_certificate_der_hex": "3082010a0203040506",
+    "source_ed25519_spki_der_hex": "302a300506032b65700321002222222222222222222222222222222222222222222222222222222222222222",
+    "time_bucket": 58000000,
+    "time_bucket_uint64_be_hex": "0000000003750280"
+  },
+  "candidates": [
+    {
+      "attempt_index": 0,
+      "vip_nonce_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "encoded_input_length": 224,
+      "sha512_hex": "0dcef1d3be09934f111816af47f99ebb2e59680862d55263444694f16208267113486ee3dd7f01d9d2f1db1679fc592d66559845c358ec28048d136e2834d6fa",
+      "candidate_vip": "dce:f1d3:be09:934f:1118:16af:47f9:9ebb",
+      "expected": "REJECT_AND_REDRAW",
+      "reason": "Candidate is outside the required 2000::/3 policy prefix."
+    },
+    {
+      "attempt_index": 1,
+      "vip_nonce_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+      "encoded_input_length": 224,
+      "sha512_hex": "319190591edf80535a3418d18480636d9d794de6378e2560f127879099a0e8be10ec95ea81097b7c41b73d7c2f7555edd9d6a0187799096ef74fdfbd3b540792",
+      "candidate_vip": "3191:9059:1edf:8053:5a34:18d1:8480:636d",
+      "expected": "DERIVE_CANDIDATE_THEN_VALIDATE_FULL_POLICY_TABLE",
+      "reason": "The address is inside 2000::/3; implementation must still check every pinned policy exclusion before accepting it."
+    }
+  ],
+  "negative_requirements": [
+    "Changing any one input field must change the encoded input and normally the digest; do not treat digest equality as an authorization decision.",
+    "Changing field order must fail the vector.",
+    "Removing a uint32 length prefix or using little-endian/native-endian lengths must fail the vector.",
+    "Encoding time_bucket as text or as a non-8-byte integer must fail the vector.",
+    "Using the raw text form of an IPv6 address instead of its 16 packed bytes must fail the vector.",
+    "Using a nonce other than 32 bytes must be rejected before derivation.",
+    "Candidate policy rejection must redraw a fresh nonce; it must not mask or rewrite digest bits.",
+    "These vectors validate derivation encoding only. They do not validate certificate parsing, signature verification, RDR authenticity, M1 schema, time freshness, nonce replay prevention, or the complete address exclusion table."
+  ]
+}
