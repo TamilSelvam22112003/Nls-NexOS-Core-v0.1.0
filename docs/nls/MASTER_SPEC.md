@@ -422,3 +422,112 @@ This specification does not authorize injecting private NLS JSON or arbitrary cu
 
 **Status:** The current code has local vIP/SourceToken binding and LSDB export/import primitives. Dedicated authenticated end-to-end vIP/LSDB synchronization and actual OSPF LSA propagation remain unverified until separately implemented and tested.
 
+
+
+## Stage 3 — Normative specification consolidation and freeze gate
+
+### Status and purpose
+
+This section consolidates the requirements already introduced by the hybrid NLH2, minimal-M1-disclosure, SourceToken data-plane, and authenticated vIP-registry amendments. It does not assert implementation conformance. The specification is not considered implementation-certified merely because this section exists; conformance requires the vectors, tests, and release evidence listed below.
+
+### Normative precedence
+
+If sections conflict, apply this precedence:
+
+1. The minimal M1 disclosure and SourceToken data-plane amendment governs M1 fields, disclosure timing, and post-M4 data packets.
+2. The hybrid NLH2 amendment governs `originalIP`, RDR primary-endpoint interpretation, vIP derivation, and vIP policy.
+3. Segment 8 governs authenticated vIP registry records, session-scoped bindings, lifecycle, and routing-plane synchronization.
+4. The remaining base NLH2 specification governs handshake framing, signatures, transcript validation, key schedule, replay protection, trust requirements, and failure semantics, except where a later amendment explicitly supersedes it.
+5. Historical or superseded examples MUST NOT override these requirements.
+
+### Canonical terminology
+
+The following terms are distinct and MUST NOT be treated as synonyms:
+
+- `originalIP`: the canonical IPv6 address extracted from the first endpoint in the authoritative RDR.
+- `vip`: the per-handshake address derived using the approved SHA-512 input encoding and address-policy version. It is valid for bootstrap only and is retired after successful M4 verification.
+- `source_token`: a session-scoped outer source token used by the approved post-M4 SourceToken data plane.
+- `original_ip`: a local registry/database spelling for the authoritative originalIP value; it is not a separate wire identity.
+
+Wire-field spelling, field type, canonical encoding, and field presence are protocol requirements. An implementation MUST NOT silently translate an unknown or legacy wire schema into the current schema.
+
+### Canonical RDR and identity contract
+
+The signed RDR is an authoritative router identity record. Its canonical schema MUST define an exact required field set and field types. The signature MUST cover the canonical RDR encoding, including the ordered `wan_endpoints` list and `originalIP`. `wan_endpoints[0]` MUST be parsed as the specified bracketed IPv6 endpoint; `originalIP` MUST equal its canonical IPv6 address component, excluding the port.
+
+Strict RDR boundaries MUST reject missing required fields, unknown fields where the schema is exact, incorrect types, malformed encodings, absent/invalid/inconsistent `originalIP`, invalid signatures, invalid validity intervals, unacceptable sequence rollback, and statuses other than ACTIVE where an active peer is required. CA registration/update MUST enforce primary-endpoint and `originalIP` consistency. An unsigned local record MUST NOT alter authoritative identity, key, or endpoint data.
+
+The full CA-issued X.509 certificate MUST be obtained through the defined authenticated certificate/registry mechanism; it MUST NOT be replaced by an unsigned identity claim. Internal database names may differ from wire names only through explicit, deterministic, tested conversion.
+
+### Canonical M1 contract
+
+M1 MUST use exactly the field set defined in the minimal-M1-disclosure amendment: `session_id`, `source_router_id`, `source_ed25519_pub`, `source_rsa_pub`, `request_for_peer_details`, `destination_router_id`, `vip`, `vip_nonce`, `time_bucket`, `vip_policy_version`, `nonce_s`, `timestamp`, `padding`, and `sig_S`. `request_for_peer_details` MUST be boolean true. Unknown fields and legacy M1 schemas MUST be rejected. M1 MUST NOT disclose S's certificate, `originalIP`, or signed RDR.
+
+The signature MUST cover the canonical encoding of every M1 field except `sig_S`, including padding. M1 MUST be sealed to D's authoritative RSA encryption key. The outer source address MUST equal the `vip` field, and the destination router identity MUST match the intended peer.
+
+D MUST perform the mandatory authenticated Router-CA lookup for S before producing a successful M2. A cache may be used for early rejection but MUST NOT replace the authoritative lookup. Both public keys in M1 MUST match S's authoritative record. Unknown, revoked, disabled, stale, or otherwise invalid records MUST fail closed.
+
+### vIP derivation invariants
+
+The vIP calculation MUST use the exact field order, uint32 length-prefix encoding, DER encodings, nonce size, time-bucket encoding, SHA-512 operation, and address-policy version specified in the hybrid NLH2 amendment. Implementations MUST NOT mask, rewrite, prefix, or otherwise alter the digest to make a candidate fit the address policy.
+
+When a candidate fails policy, S MUST draw a new 32-byte cryptographically random `vip_nonce` and recompute with the same time bucket and all other inputs unchanged. The specified attempt limit is 256 candidates, indexed 0 through 255. Exhaustion MUST fail closed. D MUST independently recompute the candidate from authoritative identity data and S's fresh authenticated Router-CA record, validate the time bucket and address policy, and compare the result with the M1 `vip` field and outer source address.
+
+### Handshake and trust invariants
+
+Implementations MUST model M1–M4 as an explicit state machine. A syntactically valid message MUST NOT by itself establish trust or authorize forwarding. The logical progression is: idle; bounded M1 validation; authoritative peer lookup validation; M2 validation; M3 disclosure and cross-check validation; M4 transcript/key confirmation; established session; closed/invalidated session. This list does not authorize reordering the prescribed wire flow.
+
+Implementations MUST reject out-of-order messages, invalid transcript hashes, identity/key substitution, unsupported policy versions, stale CA responses, invalid key confirmation, and duplicate or invalid state transitions. Failure MUST NOT leave a partially trusted session. Pending handshakes, CA lookups, and expensive cryptographic work MUST be bounded. Required global, ingress-interface, and outer-source-/64 rate controls are independent and MUST NOT be replaced by claimed-identity rate limits.
+
+### VIP Table and Trust Table invariants
+
+The VIP Table and Trust Table are separate authorization boundaries; neither table alone proves trust. A pending candidate MUST NOT be forwardable or exported as an established binding. A trusted session requires the complete prescribed handshake, authoritative fresh CA validation, transcript/key confirmation, and policy checks. Failed or mismatched verification MUST NOT overwrite an existing valid binding.
+
+Promotion to forwarding-authorized state MUST atomically publish the authenticated session binding. Bindings MUST be scoped to a session and authoritative record sequence. A stale update MUST NOT replace a newer record, and an old-session withdrawal MUST NOT delete a newer session's binding. Teardown, expiry, failed trust refresh, or revocation MUST remove forwarding eligibility and withdraw only the exact affected session binding. Cleanup MUST NOT delete unrelated operator-managed routes.
+
+### Revocation, freshness, and rekey
+
+The live-CA trust mode MUST fail closed when a required authoritative lookup is unavailable, invalid, or stale. Any explicitly configured offline-bundle mode MUST be identified operationally as having degraded freshness; it MUST NOT silently become the fallback for a failed live lookup.
+
+The release specification MUST assign a concrete maximum interval between accepted revocation and forwarding/session invalidation. The implementation MUST test revocation authentication, freshness, propagation, established-session invalidation, behavior during feed/CA failure, persistence, and restart recovery. An unbounded or unmeasured revocation interval is not a passing security result.
+
+Rekey MUST establish new directional keys, nonce prefixes, replay state, and SourceTokens. Old/new session overlap is permitted only for the configured make-before-break interval. New state MUST become usable before old state is retired, and stale old-session events MUST NOT remove the new session. Rekey MUST occur at the existing hard limit of 2^32 records in either direction or one hour, whichever occurs first. Counters MUST NOT wrap; nonce reuse under the same directional key MUST NOT occur. Failure to rekey before the hard limit MUST close the session.
+
+### Mandatory compatibility vectors
+
+Before implementation conformance can be accepted, the project MUST publish versioned deterministic test vectors covering:
+
+1. RDR canonical encoding, signature verification, endpoint parsing, and `originalIP` canonicalization.
+2. vIP field serialization, every uint32 length prefix, SHA-512 digest, and candidate address for fixed test fixtures.
+3. Candidate policy rejection, nonce redraw, and attempt-limit exhaustion.
+4. M1 canonical encoding, signature input, and exact field-set validation.
+5. M1/M2/M3 transcript values and M4 key confirmation.
+6. X25519/HKDF labels, directional keys, IV prefixes, and confirmation key using fixed test-only inputs.
+7. SourceToken derivation and direction separation.
+8. Data-record AAD, nonce construction, ciphertext authentication, replay-window behavior, and metadata modes.
+
+Each vector MUST record its version, exact inputs, expected output bytes, and verification method. Test-only credentials MUST be clearly marked. Expected outputs MUST be independently checked by at least two independent implementations or independently implemented test paths; self-generated-and-self-verified output alone is insufficient.
+
+### Mandatory negative and lifecycle tests
+
+The conformance suite MUST prove rejection of unknown, missing, duplicated, incorrectly typed, or non-canonical fields at strict boundaries; invalid/stale/revoked/disabled/mismatched/sequence-rollback RDRs and CA responses; M1 signature or padding tampering; key/destination/vIP mismatch; unsupported policy versions; prohibited candidates and redraw exhaustion; out-of-order or replayed handshake messages; invalid M4 confirmation; forwarding before establishment; forged/replayed data packets; authentication failure; duplicate or out-of-window counters; counter wrap; unauthorized inner source prefixes or route creation; stale-session withdrawal of a newer binding; revocation and expiry; restart inconsistency; incomplete cleanup; and cross-repository protocol-schema mismatches.
+
+Tests MUST assert that rejected input does not advance replay state, replace a valid binding, create an unauthorized route, disclose secrets in logs, or leave a session established.
+
+### Cross-repository and release gate
+
+NetOS and NexOS Core MUST use compatible versioned control-protocol schemas, field types, message constants, authentication rules, and error behavior. The release gate MUST run cryptographic-vector tests, schema tests, cross-repository compatibility tests, VIP/Trust lifecycle tests, handshake/revocation tests, data-plane integrity/replay/metadata/authorization tests, crash/restart tests, network-namespace end-to-end tests on every supported Ubuntu version, and measured MTU, packet-loss, throughput, and rekey tests on the exact tested commit.
+
+Historical CI success or performance measurements MUST NOT be represented as evidence for a newer commit unless that commit was actually tested. A release report MUST identify tested commit SHAs, environment, commands, complete test summaries, failures, deviations, and remaining limitations. An unexecuted mandatory test is UNVERIFIED; a failing mandatory test is FAIL; neither may be reported as PASS.
+
+### Explicit deployment gate: vIP reachability
+
+The SHA-512 vIP derivation and address-policy rules are protocol requirements. A candidate MUST NOT be rewritten to make it routable. Address-policy acceptance alone does not prove that a derived vIP is reachable over a real WAN, that the return path works, or that upstream anti-spoofing filters permit it.
+
+Before production deployment is approved, a separate deployment design MUST specify and validate the bootstrap return path, source-address validation behavior, interface/socket requirements, route cleanup, NAT/firewall behavior, fragmentation/PMTU handling, and ingress-filtering interaction. Lab-only temporary routes MUST remain explicitly lab-only and MUST NOT be installed automatically. Until this design is validated on the intended network, WAN vIP bootstrap is BLOCKED/UNVERIFIED even if cryptographic unit tests pass.
+
+### Freeze decision record
+
+The freeze review MUST record PASS, FAIL, BLOCKED, or UNVERIFIED for: canonical schemas and precedence; RDR signature/freshness/primary-endpoint validation; vIP encoding/policy/redraw/recomputation; M1 minimal disclosure and signature coverage; M1–M4 state transitions; VIP/Trust atomic lifecycle; revocation propagation and invalidation bound; rekey/nonce/counter/replay invariants; SourceToken and metadata modes; routing authorization and session-scoped withdrawals; cross-repository compatibility; and end-to-end/deployment evidence.
+
+The specification is not implementation-certified merely because this section has been added. The freeze decision MUST link to actual vector results, test logs, and reviewed commit SHAs.
