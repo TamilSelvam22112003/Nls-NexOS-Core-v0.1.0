@@ -22,7 +22,7 @@
       "vip_nonce_hex": "0000000000000000000000000000000000000000000000000000000000000000",
       "encoded_input_length": 224,
       "sha512_hex": "0dcef1d3be09934f111816af47f99ebb2e59680862d55263444694f16208267113486ee3dd7f01d9d2f1db1679fc592d66559845c358ec28048d136e2834d6fa",
-      "candidate_vip": "0dce:f1d3:be09:934f:1118:16af:47f9:9ebb",
+      "candidate_vip": "dce:f1d3:be09:934f:1118:16af:47f9:9ebb",
       "expected": "REJECT_AND_REDRAW",
       "reason": "Candidate is outside the required 2000::/3 policy prefix."
     },
