@@ -20,3 +20,14 @@
 - The master specification now defines versioned NLD2 data records and explicit `source-only` and `source-destination` policies. The stronger mode conceals both inner endpoint addresses; the source-only mode intentionally exposes the inner destination in authenticated clear metadata.
 - The current runtime still uses the prior counter-first SourceToken payload and has no `metadata_mode` configuration. Therefore, these new requirements are NOT IMPLEMENTED in this commit and this branch is not yet a runnable release for NLD2. Runtime changes must follow in a separate implementation gate with regression tests and exact-head CI.
 - The NLD2 framing change is intentionally versioned and forbids automatic fallback. Both routers must be upgraded together before enabling it.
+
+
+## 2026-10-25 — Target-branch conformance gaps (not approved deviations)
+
+- The reviewed NetOS `feat/nls-v1` branch allocates random temporary vIPs instead of the amended SHA-512 derivation with signed `vip_nonce`, `time_bucket`, and policy version. This is a nonconformance gap, not an accepted alternative.
+- The reviewed NetOS `feat/nls-v1` branch still emits the legacy counter-first SourceToken payload; the master spec requires NLD2 framing and explicit metadata modes without fallback. A newer implementation exists on a separate branch but is not the reviewed target branch.
+- The NetOS RDR v2 validator does not explicitly reject all unknown payload fields.
+- The responder's post-M4 activation lacks an explicit proof that the initiator received M4; packet-loss recovery remains unverified.
+- Core lookup rate/concurrency caps are implemented, but the TCP listener's thread-per-connection model lacks an evident global connection cap.
+
+These are recorded as unresolved implementation gaps. No protocol deviation is approved by this list; each item must be resolved against the shared master spec or handled through an explicitly versioned design decision.
