@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-from typing import Iterable
 
 _DOMAIN = b"NLS-vIP-v1"
 _NONCE_BYTES = 32
