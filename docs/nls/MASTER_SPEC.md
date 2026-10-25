@@ -439,6 +439,7 @@ If sections conflict, apply this precedence:
 3. Segment 8 governs authenticated vIP registry records, session-scoped bindings, lifecycle, and routing-plane synchronization.
 4. The remaining base NLH2 specification governs handshake framing, signatures, transcript validation, key schedule, replay protection, trust requirements, and failure semantics, except where a later amendment explicitly supersedes it.
 5. Historical or superseded examples MUST NOT override these requirements.
+6. Stage 7's normative bootstrap-locator decision supersedes all earlier outer-addressing examples: the derived `vip` MUST NOT be an outer source/destination, interface address, or FIB route.
 
 ### Canonical terminology
 
@@ -547,7 +548,7 @@ Reason: a derived arbitrary IPv6 /128 is not inherently routable. Distributing i
 2. M1 is sent from S's routable WAN locator to D's authoritative primary WAN endpoint. The M1 `vip` field remains inside the sealed, signed M1 payload. The outer source MUST equal S's authoritative `originalIP`, not `vip`.
 3. M2, M3, and M4 use the authenticated S and D WAN locators as their outer endpoints. No router may route M2/M3/M4 by looking up `vip` in the kernel FIB.
 4. The receiving router MUST validate that the outer source locator is consistent with the expected authoritative peer endpoint and the configured deployment's source-validation/NAT policy. Endpoint changes require fresh CA validation and a new handshake; an unauthenticated packet MUST NOT update the locator.
-5. The `vip` is not assigned to an interface, advertised in the routing protocol, or installed as a route. It is retained only as a session-scoped verified binding/diagnostic identifier if required by the registry. Its lifecycle ends with the handshake/session policy that references it.
+5. The `vip` is never a routing address: it MUST NOT be assigned to an interface, advertised in the routing protocol, or installed as a route. It may be held only as handshake/session cryptographic context through token derivation and cross-checking. The pending bootstrap registry row MUST be removed after successful M4 activation; no active routing binding for `vip` may remain.
 6. This profile does not claim source-address confidentiality for the handshake outer header: an observer may see the routers' WAN locators during NLH2. The post-M4 SourceToken data-plane profile remains responsible for its separately specified source-address-confidentiality properties. Documentation and claims MUST state this distinction.
 7. Implementations MUST NOT install a `vip/128` route or address as part of bootstrap. Existing operator routes and ordinary IPv6 traffic MUST remain unchanged.
 
