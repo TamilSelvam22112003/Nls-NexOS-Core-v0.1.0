@@ -1,3 +1,9 @@
+## Unreleased — Bounded Router-CA control connections (2026-10-25)
+
+- Added a global cap of 128 concurrent TCP control connections, covering unauthenticated handshakes and idle clients, rather than relying only on lookup-specific rate/concurrency limits.
+- Added unit tests for the admission cap and guaranteed slot release on handler exceptions.
+- Exact-head Core CI run 40166111961 passed on Ubuntu 22.04 and 24.04, including unit/security and cross-repository control integration tests.
+
 ## Unreleased — Metadata protection modes specification (2026-10-24)
 
 - Specified versioned NLD2 data framing and explicit `source-only` / `source-destination` policies with authenticated visible-destination semantics.
