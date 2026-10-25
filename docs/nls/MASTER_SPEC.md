@@ -531,3 +531,40 @@ Before production deployment is approved, a separate deployment design MUST spec
 The freeze review MUST record PASS, FAIL, BLOCKED, or UNVERIFIED for: canonical schemas and precedence; RDR signature/freshness/primary-endpoint validation; vIP encoding/policy/redraw/recomputation; M1 minimal disclosure and signature coverage; M1–M4 state transitions; VIP/Trust atomic lifecycle; revocation propagation and invalidation bound; rekey/nonce/counter/replay invariants; SourceToken and metadata modes; routing authorization and session-scoped withdrawals; cross-repository compatibility; and end-to-end/deployment evidence.
 
 The specification is not implementation-certified merely because this section has been added. The freeze decision MUST link to actual vector results, test logs, and reviewed commit SHAs.
+
+
+## Stage 7 — Normative bootstrap reachability decision (supersedes conflicting earlier text)
+
+### Decision and rationale
+
+For the v1 multi-hop and general WAN profile, NLS MUST use the authenticated routers' routable WAN locators for the outer IPv6 header during NLH2 bootstrap. The derived `vip` remains a handshake-scoped cryptographic identifier and MUST NOT be used as an outer source/destination address or installed in the kernel FIB. This section supersedes earlier examples requiring the outer source to equal `vip`, including the conflicting base examples above. The vIP derivation algorithm, field encoding, policy checks, nonce redraw, independent recomputation, and M1 disclosure rules remain unchanged.
+
+Reason: a derived arbitrary IPv6 /128 is not inherently routable. Distributing it as a host route through participating routers would require pre-handshake route authorization, expose address-claiming behavior, risk hijacking arbitrary global /128s in the kernel FIB, and still would not work through non-participating Internet transit networks. A destination-local route is insufficient for a multi-hop path. NLS MUST NOT attempt to solve this by changing the vIP digest or by silently injecting custom OSPF LSAs.
+
+### Outer locator rules
+
+1. S obtains its canonical `originalIP` and primary WAN endpoint from a fresh, authenticated Router-CA RDR. D does the same for its own endpoint.
+2. M1 is sent from S's routable WAN locator to D's authoritative primary WAN endpoint. The M1 `vip` field remains inside the sealed, signed M1 payload. The outer source MUST equal S's authoritative `originalIP`, not `vip`.
+3. M2, M3, and M4 use the authenticated S and D WAN locators as their outer endpoints. No router may route M2/M3/M4 by looking up `vip` in the kernel FIB.
+4. The receiving router MUST validate that the outer source locator is consistent with the expected authoritative peer endpoint and the configured deployment's source-validation/NAT policy. Endpoint changes require fresh CA validation and a new handshake; an unauthenticated packet MUST NOT update the locator.
+5. The `vip` is not assigned to an interface, advertised in the routing protocol, or installed as a route. It is retained only as a session-scoped verified binding/diagnostic identifier if required by the registry. Its lifecycle ends with the handshake/session policy that references it.
+6. This profile does not claim source-address confidentiality for the handshake outer header: an observer may see the routers' WAN locators during NLH2. The post-M4 SourceToken data-plane profile remains responsible for its separately specified source-address-confidentiality properties. Documentation and claims MUST state this distinction.
+7. Implementations MUST NOT install a `vip/128` route or address as part of bootstrap. Existing operator routes and ordinary IPv6 traffic MUST remain unchanged.
+
+### Security and deployment boundary
+
+The route-control/LSDB synchronizer MAY distribute authenticated session-binding metadata only under the separate Segment 8 rules. It MUST NOT install routes for arbitrary derived vIPs and MUST NOT treat a Router-CA identity record as route-installation authorization. No custom data may be injected into standard OSPF LSAs unless a separately approved, interoperable extension is specified.
+
+A deployment that requires the derived vIP itself to appear as the outer source is outside this v1 profile and remains BLOCKED until it has a separately specified, routable delegated-prefix or relay design with source-validation, authorization, and end-to-end tests. Lab-only temporary vIP routes MUST remain disabled and MUST NOT be used to claim production conformance.
+
+### Required tests
+
+- M1–M4 complete over a multi-hop IPv6 topology using real WAN locators; no route to the derived vIP is present or installed.
+- The responder's M2 reaches S through ordinary routing, and both sides validate authoritative endpoint consistency.
+- Tampered, stale, revoked, or mismatched endpoint records fail closed without changing routes or trusted bindings.
+- A test asserts that bootstrap creates no interface address, FIB route, or OSPF advertisement for the derived vIP.
+- Four-node, six-node, and ten-router labs pass in both directions on Ubuntu 22.04 and 24.04.
+- WAN capture documents the visible handshake locators and verifies that post-M4 data-plane behavior matches the separately approved SourceToken profile.
+- NAT, asymmetric routing, PMTU, firewall/source-validation, endpoint-change, restart, and revocation behavior are explicitly tested for each supported deployment profile.
+
+**Status:** Normative design decision for implementation planning; not implementation-certified. Runtime changes MUST follow this amendment. The six-node and ten-router gates remain FAIL until the amended flow is implemented and tested on the exact final commit.
