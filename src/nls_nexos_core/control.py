@@ -23,6 +23,8 @@ LOG = logging.getLogger("nls-nexos-core.control")
 
 class NLSControlServer:
     MAX_CONCURRENT_CONNECTIONS = 128
+    HANDSHAKE_TIMEOUT_SECONDS = 15
+    IDLE_TIMEOUT_SECONDS = 90
 
     def __init__(self, settings, registry: Registry, authority, control_identity_key):
         self.settings = settings
@@ -181,7 +183,7 @@ class NLSControlServer:
     def _handle_client(self, conn: socket.socket, address) -> None:
         channel = None
         try:
-            conn.settimeout(90)
+            conn.settimeout(self.HANDSHAKE_TIMEOUT_SECONDS)
             channel, hello, auth = server_handshake(
                 conn,
                 self.control_identity_key,
@@ -190,6 +192,9 @@ class NLSControlServer:
                 nonce_guard=self._fresh_nonce,
                 max_clock_skew_seconds=self.settings.max_clock_skew_seconds,
             )
+            # Unauthenticated sockets get a short deadline; authenticated idle
+            # sessions use the longer application inactivity timeout.
+            conn.settimeout(self.IDLE_TIMEOUT_SECONDS)
             label = (auth or {}).get("router_id", hello.get("router_id", "unidentified"))
             LOG.info("NLS control session established from %s as %s authenticated=%s",
                      address, label, bool(auth))
