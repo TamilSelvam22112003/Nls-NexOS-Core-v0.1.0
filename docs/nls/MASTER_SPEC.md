@@ -552,6 +552,14 @@ Reason: a derived arbitrary IPv6 /128 is not inherently routable. Distributing i
 6. This profile does not claim source-address confidentiality for the handshake outer header: an observer may see the routers' WAN locators during NLH2. The post-M4 SourceToken data-plane profile remains responsible for its separately specified source-address-confidentiality properties. Documentation and claims MUST state this distinction.
 7. Implementations MUST NOT install a `vip/128` route or address as part of bootstrap. Existing operator routes and ordinary IPv6 traffic MUST remain unchanged.
 
+### SourceToken socket binding and routing-plane invariance
+
+After M4, a directional SourceToken may be used as the outer IPv6 source for the protected data plane, while the authenticated peer `originalIP` remains the outer destination. On Linux routers whose WAN interface participates in OSPF/OSPFv3, the implementation MUST bind the token as a per-socket source address (the tested Linux profile uses `IPV6_FREEBIND`, UAPI option 78, together with egress-interface binding). It MUST NOT add a directional SourceToken `/128` to that routing interface. Assigning the token to the interface can create a connected host route and cause FRR to advertise session-specific addresses into the ordinary routing domain.
+
+The implementation MUST NOT enable namespace-wide non-local binding as a workaround. Session setup and teardown MUST leave WAN interface addresses, operator routes, OSPF neighbors, advertised prefixes, and the OSPF-installed FIB unchanged. A real FRR-backed regression MUST compare normalized LSDB, advertised-prefix, neighbor, and `proto ospf` route snapshots after CA synchronization, M1–M4/session establishment and data forwarding, rekey, vIP-verification TTL expiry, and trust revocation/session teardown; it MUST also include a positive control proving the test detects an intentional routing change. If the deployment's source-validation/uRPF policy rejects a SourceToken source, the deployment remains blocked pending a separately specified and tested network policy; the protocol MUST NOT silently fall back to advertising tokens.
+
+This rule supersedes the earlier general implementation suggestion to assign temporary SourceToken `/128` addresses on an interface. It does not alter the SourceToken derivation, payload AEAD, or authenticated outer destination.
+
 ### Security and deployment boundary
 
 The route-control/LSDB synchronizer MAY distribute authenticated session-binding metadata only under the separate Segment 8 rules. It MUST NOT install routes for arbitrary derived vIPs and MUST NOT treat a Router-CA identity record as route-installation authorization. No custom data may be injected into standard OSPF LSAs unless a separately approved, interoperable extension is specified.
