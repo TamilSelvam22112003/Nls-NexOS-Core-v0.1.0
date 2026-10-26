@@ -71,7 +71,7 @@ GATE FOR PROMPT 1: verification table complete; docs written; lab fixture runs (
 
 ## Hybrid NLH2 amendment: CA-verified, time-bucketed vIP
 
-This amendment supersedes only conflicting statements above about the RDR fields, vIP derivation, M1 contents, and the outer IP header fields for M1-M4. The existing NLH2 message framing, sealed messages, signatures, transcript hashes, X25519/HKDF key schedule, AEAD data plane, fresh CA cross-checks, replay protections, endpoint-switch rules, and failure semantics remain the security base.
+This amendment supersedes conflicting legacy statements about RDR fields, vIP derivation, M1 contents, and M1–M4 outer headers. NLH2 framing, sealing, signatures, transcript hashes, X25519/HKDF key schedule, AEAD data plane, fresh CA cross-checks, replay protections, authenticated endpoint validation, and failure semantics remain the security base. Any legacy vIP-based endpoint-switch example is superseded by the Stage 7 locator rules.
 
 ### RDR primary WAN address
 
@@ -191,7 +191,7 @@ This amendment supersedes only conflicting statements in earlier parts of this s
 - STEP A S5 endpoint-switch/data-plane wire format and the hybrid vIP lifecycle, but only for post-M4 data packet addressing and format.
 - the SourceToken data-record framing and metadata-protection-mode requirements defined in B.3 and B.4.
 
-Existing M2, M3 and M4 message contents remain unchanged except for the M3 disclosure timing stated below. The vIP retirement rule and VIP_AFTER_SWITCH rejection semantics remain in force. The pinned policy-v1 table/hash, ordered wan_endpoints, originalIP requirements, replay/freshness rules, signatures, transcript checks, key schedule, fail-closed behavior and the existing NLH2 handshake framing remain the security base unless this amendment explicitly says otherwise.
+Existing M2, M3 and M4 message contents remain unchanged except for the M3 disclosure timing stated below. The derived vIP is never a routable outer address under Stage 7; implementations MAY retain `VIP_AFTER_SWITCH` as a defensive diagnostic/drop reason for any unexpected packet using that address, but MUST NOT implement a vIP-based endpoint transition. The pinned policy-v1 table/hash, ordered `wan_endpoints`, `originalIP` requirements, replay/freshness rules, signatures, transcript checks, key schedule, fail-closed behavior and NLH2 framing remain the security base unless an amendment explicitly supersedes them.
 
 ### A. Minimal M1 disclosure
 
@@ -287,7 +287,7 @@ Demultiplexing MUST follow this order:
 2. If there is no exact SourceToken match, the datagram may enter the NLH2 handshake path only when it passes the existing NLH2 framing and pre-checks.
 3. All other datagrams are dropped silently. There MUST be no fallback to the retired cleartext handshake, counter-first SourceToken payloads, or legacy NLE2 data formats.
 
-The receiver MUST NOT use the observed UDP source port in this decision. SourceToken matching precedes handshake fallback. Existing vIP retirement and VIP_AFTER_SWITCH rejection semantics remain; retired-vIP traffic receives no protocol response, though a local diagnostic may record the defined VIP_AFTER_SWITCH reason.
+The receiver MUST NOT use the observed UDP source port in this decision. SourceToken matching precedes handshake fallback. A packet using the derived vIP as an outer address is invalid under Stage 7 and MUST be dropped without protocol response; a local diagnostic MAY record `VIP_AFTER_SWITCH`. This is defensive rejection only, not a routable-vIP transition.
 
 #### B.5 Legacy NLE2 header and control-carrier audit
 
