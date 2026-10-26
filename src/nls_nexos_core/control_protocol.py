@@ -240,6 +240,8 @@ def server_handshake(sock:socket.socket,identity_key:Ed25519PrivateKey,control_i
         if authorize_client is None:
             raise NLSControlError("router certificate authorization is not configured")
         auth=authorize_client(client_hello)
+        if not auth:
+            raise NLSControlError("router certificate rejected")
     eph=X25519PrivateKey.generate()
     server_hello=sign_object({
         "protocol_version":VERSION,"control_id":control_id,
