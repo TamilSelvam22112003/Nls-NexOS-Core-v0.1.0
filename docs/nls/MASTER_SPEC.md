@@ -43,14 +43,14 @@ Encoding: deterministic CBOR (canonical=True). Handshake datagram: magic "NLH2" 
 Stages (strict order; any failure drops silently on the wire, logs a reason code, tears down state)
 S1 Router authentication: certificate chain to the pinned CA root, matching RDR, status ACTIVE and not expired.
 S2 Bootstrap with vIP (mandatory):
-  - S picks a fresh random /128 vIP and assigns it to its WAN interface (`ip -6 addr add ... nodad`), TTL 10 s. Lab default: ULA fd00::/8 (fd + 40 random bits + subnet + random 64-bit IID). Pool configurable (`vip.pool`); for Internet-routed WANs use a random /128 inside the router's own routable prefix.
-  - M1 (S to D, outer source = vIP, outer destination = D's WAN endpoint): SEAL(D.rsa_pub from S's CA directory, {session_id, S.router_id, S.ed25519_pub, S.rsa_pub, nonce_s, timestamp, vip, sig_S}), padded so M1 is at least as large as the maximum M2 (anti-amplification). D does an early local screen of M1's claimed keys against its cached directory (fail closed if unknown/revoked/mismatched). This is not a replacement for S4.
-  - M2 (D to vIP): SEAL(S.rsa_pub, {session_id, D.router_id, D.certificate, D.RDR, gateway_ips, sa_proposals, dh_pub_D (X25519), nonce_d, ike_meta, H1 = hash(M1 plaintext), sig_D}).
+  - S derives a fresh per-handshake `vip` as cryptographic context only; it MUST NOT assign that address to an interface or use it as an outer locator. The selected v1 profile uses the authenticated primary WAN locators for all M1–M4 outer endpoints.
+  - M1 (S to D, outer source = S's authenticated primary WAN locator, outer destination = D's authenticated primary WAN endpoint): SEAL(D.rsa_pub from S's CA directory, {session_id, S.router_id, S.ed25519_pub, S.rsa_pub, nonce_s, timestamp, vip, sig_S}), padded so M1 is at least as large as the maximum M2 (anti-amplification). D does an early local screen of M1's claimed keys against its cached directory (fail closed if unknown/revoked/mismatched). This is not a replacement for S4.
+  - M2 (D to S's authenticated primary WAN locator): SEAL(S.rsa_pub, {session_id, D.router_id, D.certificate, D.RDR, gateway_ips, sa_proposals, dh_pub_D (X25519), nonce_d, ike_meta, H1 = hash(M1 plaintext), sig_D}).
 S3 Source cross-check: S live-looks-up D (fresh signed lookup), compares every M2 detail (certificate serial, keys, WAN endpoint, gateway IPs, SA proposals within CA policy, no downgrade). Any mismatch means drop and abort. All match means M3.
-  - M3 (S to D, still from vIP): SEAL(D.rsa_pub FROM THE CA RECORD, never from M2, {session_id, S.certificate, S.RDR, dh_pub_S, chosen_sa, S.wan_endpoint, H2 = hash(M1..M2), sig_S}).
+  - M3 (S to D, outer source = S's authenticated primary WAN locator): SEAL(D.rsa_pub FROM THE CA RECORD, never from M2, {session_id, S.certificate, S.RDR, dh_pub_S, chosen_sa, S.wan_endpoint, H2 = hash(M1..M2), sig_S}).
 S4 Destination cross-check: D live-looks-up S, compares M3 details and the M1 keys against the CA record. Mismatch means source untrusted, abort and log. Match means D derives keys and sends M4.
-  - M4 (D to vIP): SEAL(S.rsa_pub FROM THE CA RECORD, {session_id, "trust": true, H3 = hash(M1..M3), confirm = HMAC-SHA256(k_confirm, H3), sig_D}).
-S5 Endpoint switch: after S verifies M4, both routers use real WAN endpoints. D binds the session to the S.wan_endpoint validated against the CA record. S removes the vIP immediately; any later packet with outer source equal to the vIP is dropped (reason VIP_AFTER_SWITCH).
+  - M4 (D to S's authenticated primary WAN locator): SEAL(S.rsa_pub FROM THE CA RECORD, {session_id, "trust": true, H3 = hash(M1..M3), confirm = HMAC-SHA256(k_confirm, H3), sig_D}).
+S5 Session activation: after S verifies M4, both routers continue using the authenticated WAN locators for the handshake and the approved post-M4 SourceToken profile for data. The derived `vip` is never installed as an interface address or route and is not a routable endpoint; no `VIP_AFTER_SWITCH` outer-address transition is needed for it.
 Key schedule: shared = X25519(dh_S, dh_D), reject all-zero. salt = SHA256(H3 || nonce_s || nonce_d). HKDF-SHA256 with labels including both router_ids: c2s key, s2c key, c2s iv-prefix, s2c iv-prefix, k_confirm.
 Data plane: header = magic "NLE2"(4) | version(1)=2 | flags(1)=0 | reserved(2)=0 | session_id(16) | seq(8) = 32 bytes, used as AEAD AAD. AES-256-GCM, nonce = iv-prefix(4) || seq(8), separate key per direction, no per-packet RSA. The original IP packet (including source IP) is the plaintext; the header carries no inner addresses. Replay window (default 128) advances only after authentication succeeds. Rekey (new handshake, make-before-break) at 2^32 packets or 1 hour. Overhead: outer IPv6 40 + UDP 8 + 32 + 16 tag = 96 bytes (compute TUN MTU from it).
 Forwarding: D decrypts and forwards the inner packet via kernel routing. D drops the inner packet unless the inner source is inside S's RDR prefixes (`enforce_inner_source_prefix`, default true).
@@ -71,7 +71,7 @@ GATE FOR PROMPT 1: verification table complete; docs written; lab fixture runs (
 
 ## Hybrid NLH2 amendment: CA-verified, time-bucketed vIP
 
-This amendment supersedes only conflicting statements above about the RDR fields, vIP derivation, M1 contents, and the outer IP header fields for M1-M4. The existing NLH2 message framing, sealed messages, signatures, transcript hashes, X25519/HKDF key schedule, AEAD data plane, fresh CA cross-checks, replay protections, endpoint-switch rules, and failure semantics remain the security base.
+This amendment supersedes conflicting legacy statements about RDR fields, vIP derivation, M1 contents, and M1–M4 outer headers. NLH2 framing, sealing, signatures, transcript hashes, X25519/HKDF key schedule, AEAD data plane, fresh CA cross-checks, replay protections, authenticated endpoint validation, and failure semantics remain the security base. Any legacy vIP-based endpoint-switch example is superseded by the Stage 7 locator rules.
 
 ### RDR primary WAN address
 
@@ -103,9 +103,9 @@ Construct the vIP input as the following ordered sequence of fields:
 
 Encode EVERY field as `uint32_be(length) || field_bytes`, including the fixed-length fields and the domain label. Let `digest = SHA-512(encoded_fields)`. The candidate vIP is the IPv6 address represented by the first 16 bytes of `digest` (network byte order). Implementations MUST NOT use JSON, delimiter-concatenated text, platform-native integer encoding, or non-canonical certificate/key encodings for this calculation.
 
-D MUST recompute the candidate vIP using its own authoritative certificate/key and originalIP, plus S's certificate/key/originalIP obtained from a fresh, authenticated Router-CA lookup. D MUST compare the recomputed address with the M1 outer source address and reject a mismatch. D MUST accept a time bucket only if it is the current bucket or one adjacent bucket (absolute bucket difference <= 1), and MUST also enforce the independent M1 timestamp freshness, nonce replay protection, and handshake timeout. A time-bucket match does not replace the signature, transcript, certificate, status, or proof-of-possession checks.
+D MUST recompute the candidate vIP using its own authoritative certificate/key and originalIP, plus S's certificate/key/originalIP obtained from a fresh, authenticated Router-CA lookup. D MUST compare the recomputed address with the M1 `vip` field and reject a mismatch; outer source validation is a separate check against S's authoritative `originalIP`. D MUST accept a time bucket only if it is the current bucket or one adjacent bucket (absolute bucket difference <= 1), and MUST also enforce the independent M1 timestamp freshness, nonce replay protection, and handshake timeout. A time-bucket match does not replace the signature, transcript, certificate, status, or proof-of-possession checks.
 
-Because this requires S's full certificate before D sends M2, D performs an authenticated CA lookup for S after decrypting M1 and before replying. Before any RSA decryption of M1, D MUST enforce a global pending-handshake cap; if the cap is reached, D MUST reject or drop the datagram without decrypting it or allocating pending state. D MUST also apply a global token bucket, per-ingress-interface rate limits, and per-outer-source-/64 rate limits before RSA decryption. The outer source is a per-handshake vIP and is not a stable router identity, so these limits MUST be applied as independent resource controls and MUST NOT be replaced by claimed-identity limits.
+Because this requires S's full certificate before D sends M2, D performs an authenticated CA lookup for S after decrypting M1 and before replying. Before any RSA decryption of M1, D MUST enforce a global pending-handshake cap; if the cap is reached, D MUST reject or drop the datagram without decrypting it or allocating pending state. D MUST also apply a global token bucket, per-ingress-interface rate limits, and per-outer-source-/64 rate limits before RSA decryption. The outer source is the observed WAN locator and MUST be validated against authenticated endpoint state; resource limits still MUST be applied independently and MUST NOT be replaced by claimed-identity limits.
 
 After decryption and bounded schema parsing, the claimed router ID MAY be used only as a secondary rate-limit key; it MUST NOT replace the global, ingress-interface, or source-/64 controls. Before starting the CA lookup, D MUST enforce strict datagram-size and NLH2 framing limits, validate message type, lengths, required fields, field types, and schema constraints, and reject malformed input. Where a cached RDR for the claimed source router exists, D MUST verify the M1 signature against that cached identity and compare claimed identity keys to the cached record. A known mismatch, revoked/disabled status, or invalid cached record MUST be rejected before lookup. An absent cache entry does not establish trust; it may proceed only through the bounded, fail-closed path. D MUST cap concurrent pending CA lookups as well as pending handshakes.
 
@@ -120,16 +120,16 @@ M1 MUST retain all existing NLH2 security fields and MUST additionally contain `
 The outer IP header and UDP endpoint rules for the bootstrap exchange are:
 
 - `wan_endpoints[0]` is parsed as `[IPv6]:PORT`; its IPv6 address component is `originalIP` and its port is the router's bootstrap/listener port. The endpoint's port is not part of `originalIP` or the vIP hash input.
-- M1 (S to D): send to `(D.originalIP, port parsed from D.wan_endpoints[0])`; outer source = derived vIP.
-- M2 (D to S): outer source = D.originalIP; outer destination = derived vIP. Send to the source router's advertised bootstrap port from S.wan_endpoints[0].
-- M3 (S to D): send to `(D.originalIP, port parsed from D.wan_endpoints[0])`; outer source = derived vIP.
-- M4 (D to S): outer source = D.originalIP; outer destination = derived vIP. Send to the source router's advertised bootstrap port from S.wan_endpoints[0].
+- M1 (S to D): send to `(D.originalIP, port parsed from D.wan_endpoints[0])`; outer source = S's authenticated `originalIP`.
+- M2 (D to S): outer source = D's authenticated `originalIP`; outer destination = S's authenticated `originalIP`. Send to the source router's primary endpoint port from S.wan_endpoints[0].
+- M3 (S to D): send to `(D.originalIP, port parsed from D.wan_endpoints[0])`; outer source = S's authenticated `originalIP`.
+- M4 (D to S): outer source = D's authenticated `originalIP`; outer destination = S's authenticated `originalIP`. Send to the source router's primary endpoint port from S.wan_endpoints[0].
 
 M2 MUST carry D's certificate, public key, originalIP, and signed RDR, while retaining the existing DH key, SA proposal, nonce, transcript-hash, and signature fields required by NLH2. M3 MUST carry S's certificate, public key, originalIP, and signed RDR, while retaining the existing DH key, selected SA, transcript-hash, and signature fields. M4 remains the authenticated acknowledgement with transcript confirmation. Do not remove or weaken existing NLH2 fields to implement these additions.
 
 ### vIP lifecycle and deployment constraint
 
-The derived vIP is temporary and is valid only for this handshake. It MUST be assigned/recognized as the outer source address for M1 and M3 and accepted as the outer destination for M2 and M4. On successful M4 verification, apply the existing endpoint-switch behavior: move the established session to the CA-validated real WAN endpoints and immediately retire the vIP; later packets using the vIP are rejected with `VIP_AFTER_SWITCH`. Failed handshakes must clean up temporary address and state.
+The derived `vip` is handshake-scoped cryptographic context only. It MUST NOT be assigned to an interface, used as an outer source/destination, or installed in the FIB. M1–M4 use authenticated WAN locators as defined by Stage 7. Failed handshakes MUST clean up pending cryptographic and trust state without removing unrelated routes or addresses.
 
 #### Versioned vIP address policy
 
@@ -169,9 +169,9 @@ Add boundary tests for the start, end, and adjacent addresses of `2000::/3` and 
 
 #### Lab-only temporary route and explicit configuration switch
 
-The lab-only temporary route is controlled by the configuration key `vip.lab_temporary_route.enabled`, a Boolean whose default MUST be `false`. If the key is absent, invalid, or false, D MUST NOT install this route. Enabling it MUST require an explicit operator configuration in a controlled lab deployment; production configurations MUST leave it disabled, and a production-mode configuration MUST reject an attempt to enable it. This switch MUST NOT be enabled automatically by package installation, discovery, CA metadata, or handshake messages.
+The legacy configuration key `vip.lab_temporary_route.enabled` is deprecated and MUST remain false. If it is true, invalid, or absent, implementations MUST NOT install a derived-vIP route; production-mode configuration MUST reject attempts to enable it. The selected Stage 7 v1 profile forbids temporary derived-vIP routes even in lab mode. This key MUST NOT be enabled by package installation, discovery, CA metadata, or handshake messages.
 
-When and only when `vip.lab_temporary_route.enabled = true` in lab mode, after D has successfully verified M1, recomputed the vIP, validated its address class and policy version, verified the applicable signature and cached-record checks, and completed the required fresh authenticated CA lookup, D MAY install a temporary IPv6 /128 route for the derived vIP via S.originalIP when needed for the controlled lab topology. This route is temporary handshake state, MUST NOT be installed from unverified M1 fields, and MUST NOT be created from CA directory metadata alone.
+Under the selected Stage 7 v1 profile, even in lab mode, implementations MUST NOT install a route for the derived `vip` as a bootstrap workaround. A lab topology that requires derived-vIP routing is a different profile and MUST be separately specified and explicitly selected; it MUST NOT be represented as conformant to the routable-locator profile.
 
 If installed, D MUST remove this route on successful handshake completion, handshake failure, or handshake timeout. Cleanup MUST also run when the pending handshake is cancelled or its state is discarded. Removal MUST be scoped to the exact route installed for that handshake and MUST NOT delete or overwrite an operator-managed route. Route installation failure MUST fail the lab handshake closed and MUST NOT leave partially allocated vIP or handshake state. This /128-via-S.originalIP behavior is strictly for lab testing and MUST NOT be treated as the production routing solution.
 
@@ -191,7 +191,7 @@ This amendment supersedes only conflicting statements in earlier parts of this s
 - STEP A S5 endpoint-switch/data-plane wire format and the hybrid vIP lifecycle, but only for post-M4 data packet addressing and format.
 - the SourceToken data-record framing and metadata-protection-mode requirements defined in B.3 and B.4.
 
-Existing M2, M3 and M4 message contents remain unchanged except for the M3 disclosure timing stated below. The vIP retirement rule and VIP_AFTER_SWITCH rejection semantics remain in force. The pinned policy-v1 table/hash, ordered wan_endpoints, originalIP requirements, replay/freshness rules, signatures, transcript checks, key schedule, fail-closed behavior and the existing NLH2 handshake framing remain the security base unless this amendment explicitly says otherwise.
+Existing M2, M3 and M4 message contents remain unchanged except for the M3 disclosure timing stated below. The derived vIP is never a routable outer address under Stage 7; implementations MAY retain `VIP_AFTER_SWITCH` as a defensive diagnostic/drop reason for any unexpected packet using that address, but MUST NOT implement a vIP-based endpoint transition. The pinned policy-v1 table/hash, ordered `wan_endpoints`, `originalIP` requirements, replay/freshness rules, signatures, transcript checks, key schedule, fail-closed behavior and NLH2 framing remain the security base unless an amendment explicitly supersedes them.
 
 ### A. Minimal M1 disclosure
 
@@ -223,7 +223,7 @@ The intent is to disclose only the keys and parameters required for D's early vI
 
 ### B. Post-M4 SourceToken data plane
 
-After successful verification of M4, the vIP is retired for data-plane use as already specified by VIP_AFTER_SWITCH. The following outer addressing and packet format apply to all subsequent data packets.
+After successful verification of M4, the derived `vip` remains non-routable cryptographic context and is not used as a data-plane address. Subsequent data packets use the separately specified directional SourceToken profile; the authenticated peer WAN locator remains the outer destination.
 
 #### B.1 Outer packet addressing and UDP ports
 
@@ -287,7 +287,7 @@ Demultiplexing MUST follow this order:
 2. If there is no exact SourceToken match, the datagram may enter the NLH2 handshake path only when it passes the existing NLH2 framing and pre-checks.
 3. All other datagrams are dropped silently. There MUST be no fallback to the retired cleartext handshake, counter-first SourceToken payloads, or legacy NLE2 data formats.
 
-The receiver MUST NOT use the observed UDP source port in this decision. SourceToken matching precedes handshake fallback. Existing vIP retirement and VIP_AFTER_SWITCH rejection semantics remain; retired-vIP traffic receives no protocol response, though a local diagnostic may record the defined VIP_AFTER_SWITCH reason.
+The receiver MUST NOT use the observed UDP source port in this decision. SourceToken matching precedes handshake fallback. A packet using the derived vIP as an outer address is invalid under Stage 7 and MUST be dropped without protocol response; a local diagnostic MAY record `VIP_AFTER_SWITCH`. This is defensive rejection only, not a routable-vIP transition.
 
 #### B.5 Legacy NLE2 header and control-carrier audit
 
@@ -376,7 +376,7 @@ Specification text, test names, and external descriptions MUST use "source-addre
 
 ### Purpose
 
-The NLS vIP registry is the authoritative local table mapping each active NLS router identity and originalIP to its current session-scoped vIP/SourceToken binding. It is distinct from the temporary kernel-address allocator: allocator state records which local /128 addresses are assigned and owned, while the registry records authenticated protocol identity, session lifecycle, and reachability metadata.
+The NLS session registry is the authoritative local table mapping each active NLS router identity and `originalIP` to its session-scoped cryptographic `vip` context and directional SourceToken binding. The `vip` is not allocated as a kernel address: no interface address, FIB route, or routing advertisement is created for it. Registry state records authenticated identity, session lifecycle, and reachability metadata; SourceToken source selection is handled by the specified per-socket binding mechanism.
 
 The implementation MUST keep these state stores separate:
 
@@ -422,3 +422,158 @@ This specification does not authorize injecting private NLS JSON or arbitrary cu
 
 **Status:** The current code has local vIP/SourceToken binding and LSDB export/import primitives. Dedicated authenticated end-to-end vIP/LSDB synchronization and actual OSPF LSA propagation remain unverified until separately implemented and tested.
 
+
+
+## Stage 3 — Normative specification consolidation and freeze gate
+
+### Status and purpose
+
+This section consolidates the requirements already introduced by the hybrid NLH2, minimal-M1-disclosure, SourceToken data-plane, and authenticated vIP-registry amendments. It does not assert implementation conformance. The specification is not considered implementation-certified merely because this section exists; conformance requires the vectors, tests, and release evidence listed below.
+
+### Normative precedence
+
+If sections conflict, apply this precedence:
+
+1. The minimal M1 disclosure and SourceToken data-plane amendment governs the exact M1 field set, disclosure timing, and post-M4 data packets. It does not override the Stage 7 outer-locator rules below.
+2. Stage 7's normative bootstrap-locator decision governs the outer IP headers for M1-M4 and the routing treatment of `vip`. The derived `vip` MUST NOT be an outer source/destination, interface address, or kernel FIB route. After M4, a directional SourceToken may be used as the protected data-plane outer source, while the authenticated peer `originalIP` is the outer destination.
+3. The hybrid NLH2 amendment governs `originalIP`, RDR primary-endpoint interpretation, vIP derivation, nonce redraw, address policy, and cryptographic context, except where Stage 7 explicitly controls the outer locator.
+4. Segment 8 governs authenticated vIP registry records, session-scoped bindings, lifecycle, and routing-plane synchronization.
+5. The remaining base NLH2 specification governs handshake framing, signatures, transcript validation, key schedule, replay protection, trust requirements, and failure semantics, except where a later amendment explicitly supersedes it.
+6. Historical or superseded examples MUST NOT override these requirements.
+
+### Canonical terminology
+
+The following terms are distinct and MUST NOT be treated as synonyms:
+
+- `originalIP`: the canonical IPv6 address extracted from the first endpoint in the authoritative RDR.
+- `vip`: the per-handshake value derived using the approved SHA-512 input encoding and address-policy version. It remains signed/sealed cryptographic handshake context only, MUST NOT be used as a network locator, and is retired after successful M4 verification.
+- `source_token`: a session-scoped outer source token used by the approved post-M4 SourceToken data plane.
+- `original_ip`: a local registry/database spelling for the authoritative originalIP value; it is not a separate wire identity.
+
+Wire-field spelling, field type, canonical encoding, and field presence are protocol requirements. An implementation MUST NOT silently translate an unknown or legacy wire schema into the current schema.
+
+### Canonical RDR and identity contract
+
+The signed RDR is an authoritative router identity record. Its canonical schema MUST define an exact required field set and field types. The signature MUST cover the canonical RDR encoding, including the ordered `wan_endpoints` list and `originalIP`. `wan_endpoints[0]` MUST be parsed as the specified bracketed IPv6 endpoint; `originalIP` MUST equal its canonical IPv6 address component, excluding the port.
+
+Strict RDR boundaries MUST reject missing required fields, unknown fields where the schema is exact, incorrect types, malformed encodings, absent/invalid/inconsistent `originalIP`, invalid signatures, invalid validity intervals, unacceptable sequence rollback, and statuses other than ACTIVE where an active peer is required. CA registration/update MUST enforce primary-endpoint and `originalIP` consistency. An unsigned local record MUST NOT alter authoritative identity, key, or endpoint data.
+
+The full CA-issued X.509 certificate MUST be obtained through the defined authenticated certificate/registry mechanism; it MUST NOT be replaced by an unsigned identity claim. Internal database names may differ from wire names only through explicit, deterministic, tested conversion.
+
+### Canonical M1 contract
+
+M1 MUST use exactly the field set defined in the minimal-M1-disclosure amendment: `session_id`, `source_router_id`, `source_ed25519_pub`, `source_rsa_pub`, `request_for_peer_details`, `destination_router_id`, `vip`, `vip_nonce`, `time_bucket`, `vip_policy_version`, `nonce_s`, `timestamp`, `padding`, and `sig_S`. `request_for_peer_details` MUST be boolean true. Unknown fields and legacy M1 schemas MUST be rejected. M1 MUST NOT disclose S's certificate, `originalIP`, or signed RDR.
+
+The signature MUST cover the canonical encoding of every M1 field except `sig_S`, including padding. M1 MUST be sealed to D's authoritative RSA encryption key. The outer source address MUST equal S's authoritative `originalIP`, as specified by the Stage 7 bootstrap-locator decision, not the derived `vip`. The destination router identity MUST match the intended peer.
+
+D MUST perform the mandatory authenticated Router-CA lookup for S before producing a successful M2. A cache may be used for early rejection but MUST NOT replace the authoritative lookup. Both public keys in M1 MUST match S's authoritative record. Unknown, revoked, disabled, stale, or otherwise invalid records MUST fail closed.
+
+### vIP derivation invariants
+
+The vIP calculation MUST use the exact field order, uint32 length-prefix encoding, DER encodings, nonce size, time-bucket encoding, SHA-512 operation, and address-policy version specified in the hybrid NLH2 amendment. Implementations MUST NOT mask, rewrite, prefix, or otherwise alter the digest to make a candidate fit the address policy.
+
+When a candidate fails policy, S MUST draw a new 32-byte cryptographically random `vip_nonce` and recompute with the same time bucket and all other inputs unchanged. The specified attempt limit is 256 candidates, indexed 0 through 255. Exhaustion MUST fail closed. D MUST independently recompute the candidate from authoritative identity data and S's fresh authenticated Router-CA record, validate the time bucket and address policy, and compare the result with the M1 `vip` field. D MUST validate the outer source separately against S's authenticated authoritative `originalIP` under the Stage 7 bootstrap-locator rules.
+
+### Handshake and trust invariants
+
+Implementations MUST model M1–M4 as an explicit state machine. A syntactically valid message MUST NOT by itself establish trust or authorize forwarding. The logical progression is: idle; bounded M1 validation; authoritative peer lookup validation; M2 validation; M3 disclosure and cross-check validation; M4 transcript/key confirmation; established session; closed/invalidated session. This list does not authorize reordering the prescribed wire flow.
+
+Implementations MUST reject out-of-order messages, invalid transcript hashes, identity/key substitution, unsupported policy versions, stale CA responses, invalid key confirmation, and duplicate or invalid state transitions. Failure MUST NOT leave a partially trusted session. Pending handshakes, CA lookups, and expensive cryptographic work MUST be bounded. Required global, ingress-interface, and outer-source-/64 rate controls are independent and MUST NOT be replaced by claimed-identity rate limits.
+
+### VIP Table and Trust Table invariants
+
+The VIP Table and Trust Table are separate authorization boundaries; neither table alone proves trust. A pending candidate MUST NOT be forwardable or exported as an established binding. A trusted session requires the complete prescribed handshake, authoritative fresh CA validation, transcript/key confirmation, and policy checks. Failed or mismatched verification MUST NOT overwrite an existing valid binding.
+
+Promotion to forwarding-authorized state MUST atomically publish the authenticated session binding. Bindings MUST be scoped to a session and authoritative record sequence. A stale update MUST NOT replace a newer record, and an old-session withdrawal MUST NOT delete a newer session's binding. Teardown, expiry, failed trust refresh, or revocation MUST remove forwarding eligibility and withdraw only the exact affected session binding. Cleanup MUST NOT delete unrelated operator-managed routes.
+
+### Revocation, freshness, and rekey
+
+The live-CA trust mode MUST fail closed when a required authoritative lookup is unavailable, invalid, or stale. Any explicitly configured offline-bundle mode MUST be identified operationally as having degraded freshness; it MUST NOT silently become the fallback for a failed live lookup.
+
+The release specification MUST assign a concrete maximum interval between accepted revocation and forwarding/session invalidation. The implementation MUST test revocation authentication, freshness, propagation, established-session invalidation, behavior during feed/CA failure, persistence, and restart recovery. An unbounded or unmeasured revocation interval is not a passing security result.
+
+Rekey MUST establish new directional keys, nonce prefixes, replay state, and SourceTokens. Old/new session overlap is permitted only for the configured make-before-break interval. New state MUST become usable before old state is retired, and stale old-session events MUST NOT remove the new session. Rekey MUST occur at the existing hard limit of 2^32 records in either direction or one hour, whichever occurs first. Counters MUST NOT wrap; nonce reuse under the same directional key MUST NOT occur. Failure to rekey before the hard limit MUST close the session.
+
+### Mandatory compatibility vectors
+
+Before implementation conformance can be accepted, the project MUST publish versioned deterministic test vectors covering:
+
+1. RDR canonical encoding, signature verification, endpoint parsing, and `originalIP` canonicalization.
+2. vIP field serialization, every uint32 length prefix, SHA-512 digest, and candidate address for fixed test fixtures.
+3. Candidate policy rejection, nonce redraw, and attempt-limit exhaustion.
+4. M1 canonical encoding, signature input, and exact field-set validation.
+5. M1/M2/M3 transcript values and M4 key confirmation.
+6. X25519/HKDF labels, directional keys, IV prefixes, and confirmation key using fixed test-only inputs.
+7. SourceToken derivation and direction separation.
+8. Data-record AAD, nonce construction, ciphertext authentication, replay-window behavior, and metadata modes.
+
+Each vector MUST record its version, exact inputs, expected output bytes, and verification method. Test-only credentials MUST be clearly marked. Expected outputs MUST be independently checked by at least two independent implementations or independently implemented test paths; self-generated-and-self-verified output alone is insufficient.
+
+### Mandatory negative and lifecycle tests
+
+The conformance suite MUST prove rejection of unknown, missing, duplicated, incorrectly typed, or non-canonical fields at strict boundaries; invalid/stale/revoked/disabled/mismatched/sequence-rollback RDRs and CA responses; M1 signature or padding tampering; key/destination/vIP mismatch; unsupported policy versions; prohibited candidates and redraw exhaustion; out-of-order or replayed handshake messages; invalid M4 confirmation; forwarding before establishment; forged/replayed data packets; authentication failure; duplicate or out-of-window counters; counter wrap; unauthorized inner source prefixes or route creation; stale-session withdrawal of a newer binding; revocation and expiry; restart inconsistency; incomplete cleanup; and cross-repository protocol-schema mismatches.
+
+Tests MUST assert that rejected input does not advance replay state, replace a valid binding, create an unauthorized route, disclose secrets in logs, or leave a session established.
+
+### Cross-repository and release gate
+
+NetOS and NexOS Core MUST use compatible versioned control-protocol schemas, field types, message constants, authentication rules, and error behavior. The release gate MUST run cryptographic-vector tests, schema tests, cross-repository compatibility tests, VIP/Trust lifecycle tests, handshake/revocation tests, data-plane integrity/replay/metadata/authorization tests, crash/restart tests, network-namespace end-to-end tests on every supported Ubuntu version, and measured MTU, packet-loss, throughput, and rekey tests on the exact tested commit.
+
+Historical CI success or performance measurements MUST NOT be represented as evidence for a newer commit unless that commit was actually tested. A release report MUST identify tested commit SHAs, environment, commands, complete test summaries, failures, deviations, and remaining limitations. An unexecuted mandatory test is UNVERIFIED; a failing mandatory test is FAIL; neither may be reported as PASS.
+
+### Explicit deployment gate: vIP reachability
+
+The SHA-512 vIP derivation and address-policy rules are protocol requirements. A candidate MUST NOT be rewritten to make it routable. Address-policy acceptance alone does not prove that a derived vIP is reachable over a real WAN, that the return path works, or that upstream anti-spoofing filters permit it.
+
+Before production deployment is approved, a separate deployment design MUST specify and validate the bootstrap return path, source-address validation behavior, interface/socket requirements, route cleanup, NAT/firewall behavior, fragmentation/PMTU handling, and ingress-filtering interaction. Lab-only temporary routes MUST remain explicitly lab-only and MUST NOT be installed automatically. Until this design is validated on the intended network, production deployment of the selected routable-locator profile remains BLOCKED/UNVERIFIED even if cryptographic unit tests pass. This deployment gate covers WAN endpoint reachability, NAT/firewall behavior, source validation, asymmetric routing, PMTU/fragmentation, restart recovery, and revocation behavior.
+
+### Freeze decision record
+
+The freeze review MUST record PASS, FAIL, BLOCKED, or UNVERIFIED for: canonical schemas and precedence; RDR signature/freshness/primary-endpoint validation; vIP encoding/policy/redraw/recomputation; M1 minimal disclosure and signature coverage; M1–M4 state transitions; VIP/Trust atomic lifecycle; revocation propagation and invalidation bound; rekey/nonce/counter/replay invariants; SourceToken and metadata modes; routing authorization and session-scoped withdrawals; cross-repository compatibility; and end-to-end/deployment evidence.
+
+The specification is not implementation-certified merely because this section has been added. The freeze decision MUST link to actual vector results, test logs, and reviewed commit SHAs.
+
+
+## Stage 7 — Normative bootstrap reachability decision (supersedes conflicting earlier text)
+
+### Decision and rationale
+
+For the v1 multi-hop and general WAN profile, NLS MUST use the authenticated routers' routable WAN locators for the outer IPv6 header during NLH2 bootstrap. The derived `vip` remains a handshake-scoped cryptographic identifier and MUST NOT be used as an outer source/destination address or installed in the kernel FIB. This section supersedes earlier examples requiring the outer source to equal `vip`, including the conflicting base examples above. The vIP derivation algorithm, field encoding, policy checks, nonce redraw, independent recomputation, and M1 disclosure rules remain unchanged.
+
+Reason: a derived arbitrary IPv6 /128 is not inherently routable. Distributing it as a host route through participating routers would require pre-handshake route authorization, expose address-claiming behavior, risk hijacking arbitrary global /128s in the kernel FIB, and still would not work through non-participating Internet transit networks. A destination-local route is insufficient for a multi-hop path. NLS MUST NOT attempt to solve this by changing the vIP digest or by silently injecting custom OSPF LSAs.
+
+### Outer locator rules
+
+1. S obtains its canonical `originalIP` and primary WAN endpoint from a fresh, authenticated Router-CA RDR. D does the same for its own endpoint.
+2. M1 is sent from S's routable WAN locator to D's authoritative primary WAN endpoint. The M1 `vip` field remains inside the sealed, signed M1 payload. The outer source MUST equal S's authoritative `originalIP`, not `vip`.
+3. M2, M3, and M4 use the authenticated S and D WAN locators as their outer endpoints. No router may route M2/M3/M4 by looking up `vip` in the kernel FIB.
+4. The receiving router MUST validate that the outer source locator is consistent with the expected authoritative peer endpoint and the configured deployment's source-validation/NAT policy. Endpoint changes require fresh CA validation and a new handshake; an unauthenticated packet MUST NOT update the locator.
+5. The `vip` is never a routing address: it MUST NOT be assigned to an interface, advertised in the routing protocol, or installed as a route. It may be held only as handshake/session cryptographic context through token derivation and cross-checking. The pending bootstrap registry row MUST be removed after successful M4 activation; no active routing binding for `vip` may remain.
+6. This profile does not claim source-address confidentiality for the handshake outer header: an observer may see the routers' WAN locators during NLH2. The post-M4 SourceToken data-plane profile remains responsible for its separately specified source-address-confidentiality properties. Documentation and claims MUST state this distinction.
+7. Implementations MUST NOT install a `vip/128` route or address as part of bootstrap. Existing operator routes and ordinary IPv6 traffic MUST remain unchanged.
+
+### SourceToken socket binding and routing-plane invariance
+
+After M4, a directional SourceToken may be used as the outer IPv6 source for the protected data plane, while the authenticated peer `originalIP` remains the outer destination. On Linux routers whose WAN interface participates in OSPF/OSPFv3, the implementation MUST bind the token as a per-socket source address (the tested Linux profile uses `IPV6_FREEBIND`, UAPI option 78, together with egress-interface binding). It MUST NOT add a directional SourceToken `/128` to that routing interface. Assigning the token to the interface can create a connected host route and cause FRR to advertise session-specific addresses into the ordinary routing domain.
+
+The implementation MUST NOT enable namespace-wide non-local binding as a workaround. Session setup and teardown MUST leave WAN interface addresses, operator routes, OSPF neighbors, advertised prefixes, and the OSPF-installed FIB unchanged. A real FRR-backed regression MUST compare normalized LSDB, advertised-prefix, neighbor, and `proto ospf` route snapshots after CA synchronization, M1–M4/session establishment and data forwarding, rekey, vIP-verification TTL expiry, and trust revocation/session teardown; it MUST also include a positive control proving the test detects an intentional routing change. If the deployment's source-validation/uRPF policy rejects a SourceToken source, the deployment remains blocked pending a separately specified and tested network policy; the protocol MUST NOT silently fall back to advertising tokens.
+
+This rule supersedes the earlier general implementation suggestion to assign temporary SourceToken `/128` addresses on an interface. It does not alter the SourceToken derivation, payload AEAD, or authenticated outer destination.
+
+### Security and deployment boundary
+
+The route-control/LSDB synchronizer MAY distribute authenticated session-binding metadata only under the separate Segment 8 rules. It MUST NOT install routes for arbitrary derived vIPs and MUST NOT treat a Router-CA identity record as route-installation authorization. No custom data may be injected into standard OSPF LSAs unless a separately approved, interoperable extension is specified.
+
+A deployment that requires the derived vIP itself to appear as the outer source is outside this v1 profile and remains BLOCKED until it has a separately specified, routable delegated-prefix or relay design with source-validation, authorization, and end-to-end tests. Lab-only temporary vIP routes MUST remain disabled and MUST NOT be used to claim production conformance.
+
+### Required tests
+
+- M1–M4 complete over a multi-hop IPv6 topology using real WAN locators; no route to the derived vIP is present or installed.
+- The responder's M2 reaches S through ordinary routing, and both sides validate authoritative endpoint consistency.
+- Tampered, stale, revoked, or mismatched endpoint records fail closed without changing routes or trusted bindings.
+- A test asserts that bootstrap creates no interface address, FIB route, or OSPF advertisement for the derived vIP.
+- Four-node, six-node, and ten-router labs pass in both directions on Ubuntu 22.04 and 24.04.
+- WAN capture documents the visible handshake locators and verifies that post-M4 data-plane behavior matches the separately approved SourceToken profile.
+- NAT, asymmetric routing, PMTU, firewall/source-validation, endpoint-change, restart, and revocation behavior are explicitly tested for each supported deployment profile.
+
+**Status:** Normative design decision; do not infer production readiness from this amendment alone. The real FRR smoke gate and full six-node NLS lifecycle OSPFv3 invariance checks passed on Ubuntu 22.04 and 24.04 on NetOS head `09a603d5677c1a7fbabdac34f4213d91209c326c`. The added production-TTL vIP-verification expiry case also passed on both OS versions on head `43341e164f760d9ee1a0be48cedf28c7f6dbf418`: two rows expired and became un-retrievable while the OSPF neighbor, normalized LSDB, advertised-prefix, and OSPF-FIB snapshots stayed unchanged. Full exact-head CI run [`40299384039`](https://github.com/TamilSelvam22112003/NlsxNetOS-v0.1.0/actions/runs/40299384039) remains in progress for throughput/profile/evidence gates. Deployment tests for NAT/uRPF/source-validation, asymmetric routing, PMTU/fragmentation, firewall rules, restart and endpoint-change recovery remain separate BLOCKED/UNVERIFIED gates.
