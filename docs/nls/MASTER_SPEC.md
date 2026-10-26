@@ -169,7 +169,7 @@ Add boundary tests for the start, end, and adjacent addresses of `2000::/3` and 
 
 #### Lab-only temporary route and explicit configuration switch
 
-The lab-only temporary route is controlled by the configuration key `vip.lab_temporary_route.enabled`, a Boolean whose default MUST be `false`. If the key is absent, invalid, or false, D MUST NOT install this route. Enabling it MUST require an explicit operator configuration in a controlled lab deployment; production configurations MUST leave it disabled, and a production-mode configuration MUST reject an attempt to enable it. This switch MUST NOT be enabled automatically by package installation, discovery, CA metadata, or handshake messages.
+The legacy configuration key `vip.lab_temporary_route.enabled` is deprecated and MUST remain false. If it is true, invalid, or absent, implementations MUST NOT install a derived-vIP route; production-mode configuration MUST reject attempts to enable it. The selected Stage 7 v1 profile forbids temporary derived-vIP routes even in lab mode. This key MUST NOT be enabled by package installation, discovery, CA metadata, or handshake messages.
 
 Under the selected Stage 7 v1 profile, even in lab mode, implementations MUST NOT install a route for the derived `vip` as a bootstrap workaround. A lab topology that requires derived-vIP routing is a different profile and MUST be separately specified and explicitly selected; it MUST NOT be represented as conformant to the routable-locator profile.
 
@@ -223,7 +223,7 @@ The intent is to disclose only the keys and parameters required for D's early vI
 
 ### B. Post-M4 SourceToken data plane
 
-After successful verification of M4, the vIP is retired for data-plane use as already specified by VIP_AFTER_SWITCH. The following outer addressing and packet format apply to all subsequent data packets.
+After successful verification of M4, the derived `vip` remains non-routable cryptographic context and is not used as a data-plane address. Subsequent data packets use the separately specified directional SourceToken profile; the authenticated peer WAN locator remains the outer destination.
 
 #### B.1 Outer packet addressing and UDP ports
 
@@ -376,7 +376,7 @@ Specification text, test names, and external descriptions MUST use "source-addre
 
 ### Purpose
 
-The NLS vIP registry is the authoritative local table mapping each active NLS router identity and originalIP to its current session-scoped vIP/SourceToken binding. It is distinct from the temporary kernel-address allocator: allocator state records which local /128 addresses are assigned and owned, while the registry records authenticated protocol identity, session lifecycle, and reachability metadata.
+The NLS session registry is the authoritative local table mapping each active NLS router identity and `originalIP` to its session-scoped cryptographic `vip` context and directional SourceToken binding. The `vip` is not allocated as a kernel address: no interface address, FIB route, or routing advertisement is created for it. Registry state records authenticated identity, session lifecycle, and reachability metadata; SourceToken source selection is handled by the specified per-socket binding mechanism.
 
 The implementation MUST keep these state stores separate:
 
