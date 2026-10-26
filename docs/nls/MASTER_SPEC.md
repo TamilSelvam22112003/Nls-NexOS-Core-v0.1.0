@@ -434,19 +434,19 @@ This section consolidates the requirements already introduced by the hybrid NLH2
 
 If sections conflict, apply this precedence:
 
-1. The minimal M1 disclosure and SourceToken data-plane amendment governs M1 fields, disclosure timing, and post-M4 data packets.
-2. The hybrid NLH2 amendment governs `originalIP`, RDR primary-endpoint interpretation, vIP derivation, and vIP policy.
-3. Segment 8 governs authenticated vIP registry records, session-scoped bindings, lifecycle, and routing-plane synchronization.
-4. The remaining base NLH2 specification governs handshake framing, signatures, transcript validation, key schedule, replay protection, trust requirements, and failure semantics, except where a later amendment explicitly supersedes it.
-5. Historical or superseded examples MUST NOT override these requirements.
-6. Stage 7's normative bootstrap-locator decision supersedes all earlier outer-addressing examples: the derived `vip` MUST NOT be an outer source/destination, interface address, or FIB route.
+1. The minimal M1 disclosure and SourceToken data-plane amendment governs the exact M1 field set, disclosure timing, and post-M4 data packets. It does not override the Stage 7 outer-locator rules below.
+2. Stage 7's normative bootstrap-locator decision governs the outer IP headers for M1-M4 and the routing treatment of `vip`. The derived `vip` MUST NOT be an outer source/destination, interface address, or kernel FIB route. After M4, a directional SourceToken may be used as the protected data-plane outer source, while the authenticated peer `originalIP` is the outer destination.
+3. The hybrid NLH2 amendment governs `originalIP`, RDR primary-endpoint interpretation, vIP derivation, nonce redraw, address policy, and cryptographic context, except where Stage 7 explicitly controls the outer locator.
+4. Segment 8 governs authenticated vIP registry records, session-scoped bindings, lifecycle, and routing-plane synchronization.
+5. The remaining base NLH2 specification governs handshake framing, signatures, transcript validation, key schedule, replay protection, trust requirements, and failure semantics, except where a later amendment explicitly supersedes it.
+6. Historical or superseded examples MUST NOT override these requirements.
 
 ### Canonical terminology
 
 The following terms are distinct and MUST NOT be treated as synonyms:
 
 - `originalIP`: the canonical IPv6 address extracted from the first endpoint in the authoritative RDR.
-- `vip`: the per-handshake address derived using the approved SHA-512 input encoding and address-policy version. It is valid for bootstrap only and is retired after successful M4 verification.
+- `vip`: the per-handshake value derived using the approved SHA-512 input encoding and address-policy version. It remains signed/sealed cryptographic handshake context only, MUST NOT be used as a network locator, and is retired after successful M4 verification.
 - `source_token`: a session-scoped outer source token used by the approved post-M4 SourceToken data plane.
 - `original_ip`: a local registry/database spelling for the authoritative originalIP value; it is not a separate wire identity.
 
