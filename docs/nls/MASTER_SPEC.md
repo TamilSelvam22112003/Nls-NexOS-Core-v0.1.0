@@ -464,7 +464,7 @@ The full CA-issued X.509 certificate MUST be obtained through the defined authen
 
 M1 MUST use exactly the field set defined in the minimal-M1-disclosure amendment: `session_id`, `source_router_id`, `source_ed25519_pub`, `source_rsa_pub`, `request_for_peer_details`, `destination_router_id`, `vip`, `vip_nonce`, `time_bucket`, `vip_policy_version`, `nonce_s`, `timestamp`, `padding`, and `sig_S`. `request_for_peer_details` MUST be boolean true. Unknown fields and legacy M1 schemas MUST be rejected. M1 MUST NOT disclose S's certificate, `originalIP`, or signed RDR.
 
-The signature MUST cover the canonical encoding of every M1 field except `sig_S`, including padding. M1 MUST be sealed to D's authoritative RSA encryption key. The outer source address MUST equal the `vip` field, and the destination router identity MUST match the intended peer.
+The signature MUST cover the canonical encoding of every M1 field except `sig_S`, including padding. M1 MUST be sealed to D's authoritative RSA encryption key. The outer source address MUST equal S's authoritative `originalIP`, as specified by the Stage 7 bootstrap-locator decision, not the derived `vip`. The destination router identity MUST match the intended peer.
 
 D MUST perform the mandatory authenticated Router-CA lookup for S before producing a successful M2. A cache may be used for early rejection but MUST NOT replace the authoritative lookup. Both public keys in M1 MUST match S's authoritative record. Unknown, revoked, disabled, stale, or otherwise invalid records MUST fail closed.
 
@@ -472,7 +472,7 @@ D MUST perform the mandatory authenticated Router-CA lookup for S before produci
 
 The vIP calculation MUST use the exact field order, uint32 length-prefix encoding, DER encodings, nonce size, time-bucket encoding, SHA-512 operation, and address-policy version specified in the hybrid NLH2 amendment. Implementations MUST NOT mask, rewrite, prefix, or otherwise alter the digest to make a candidate fit the address policy.
 
-When a candidate fails policy, S MUST draw a new 32-byte cryptographically random `vip_nonce` and recompute with the same time bucket and all other inputs unchanged. The specified attempt limit is 256 candidates, indexed 0 through 255. Exhaustion MUST fail closed. D MUST independently recompute the candidate from authoritative identity data and S's fresh authenticated Router-CA record, validate the time bucket and address policy, and compare the result with the M1 `vip` field and outer source address.
+When a candidate fails policy, S MUST draw a new 32-byte cryptographically random `vip_nonce` and recompute with the same time bucket and all other inputs unchanged. The specified attempt limit is 256 candidates, indexed 0 through 255. Exhaustion MUST fail closed. D MUST independently recompute the candidate from authoritative identity data and S's fresh authenticated Router-CA record, validate the time bucket and address policy, and compare the result with the M1 `vip` field. D MUST validate the outer source separately against S's authenticated authoritative `originalIP` under the Stage 7 bootstrap-locator rules.
 
 ### Handshake and trust invariants
 
@@ -525,7 +525,7 @@ Historical CI success or performance measurements MUST NOT be represented as evi
 
 The SHA-512 vIP derivation and address-policy rules are protocol requirements. A candidate MUST NOT be rewritten to make it routable. Address-policy acceptance alone does not prove that a derived vIP is reachable over a real WAN, that the return path works, or that upstream anti-spoofing filters permit it.
 
-Before production deployment is approved, a separate deployment design MUST specify and validate the bootstrap return path, source-address validation behavior, interface/socket requirements, route cleanup, NAT/firewall behavior, fragmentation/PMTU handling, and ingress-filtering interaction. Lab-only temporary routes MUST remain explicitly lab-only and MUST NOT be installed automatically. Until this design is validated on the intended network, WAN vIP bootstrap is BLOCKED/UNVERIFIED even if cryptographic unit tests pass.
+Before production deployment is approved, a separate deployment design MUST specify and validate the bootstrap return path, source-address validation behavior, interface/socket requirements, route cleanup, NAT/firewall behavior, fragmentation/PMTU handling, and ingress-filtering interaction. Lab-only temporary routes MUST remain explicitly lab-only and MUST NOT be installed automatically. Until this design is validated on the intended network, production deployment of the selected routable-locator profile remains BLOCKED/UNVERIFIED even if cryptographic unit tests pass. This deployment gate covers WAN endpoint reachability, NAT/firewall behavior, source validation, asymmetric routing, PMTU/fragmentation, restart recovery, and revocation behavior.
 
 ### Freeze decision record
 
@@ -568,4 +568,4 @@ A deployment that requires the derived vIP itself to appear as the outer source 
 - WAN capture documents the visible handshake locators and verifies that post-M4 data-plane behavior matches the separately approved SourceToken profile.
 - NAT, asymmetric routing, PMTU, firewall/source-validation, endpoint-change, restart, and revocation behavior are explicitly tested for each supported deployment profile.
 
-**Status:** Normative design decision for implementation planning; not implementation-certified. Runtime changes MUST follow this amendment. The six-node and ten-router gates remain FAIL until the amended flow is implemented and tested on the exact final commit.
+**Status:** Normative design decision for implementation planning; not implementation-certified. Runtime changes MUST follow this amendment. The six-node and ten-router CI jobs have passed on NetOS commit `dd91e33592aeaa01ea045b96c8f63204124bb044` for Ubuntu 22.04 and 24.04. This does not certify implementation conformance: OSPF/OSPFv3 advertisement invariance and the remaining freeze/release gates still require explicit evidence.
