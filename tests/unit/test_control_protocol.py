@@ -28,3 +28,26 @@ def test_sequence_exhaustion_requires_reconnect():
     sock=socket.socket(); ch=NLSControlRecordChannel(sock,b"a"*32,b"b"*32,b"CLNT",b"SRVR",send_sequence=2**64-1)
     with pytest.raises(NLSControlError,match="exhausted"): ch.send({"type":"heartbeat"})
     sock.close()
+
+def test_rejected_router_certificate_fails_closed(monkeypatch):
+    from nls_nexos_core import control_protocol as cp
+    import time
+    client_key = Ed25519PrivateKey.generate()
+    hello = cp.sign_object({
+        "protocol_version": cp.VERSION,
+        "router_id": "edge-test",
+        "identity_public_key": b64(public_key_bytes(client_key)),
+        "ephemeral_public_key": b64(b"e" * 32),
+        "nonce": b64(b"n" * 32),
+        "timestamp": int(time.time()),
+        "certificate_pem": "test-certificate",
+    }, cp.CLIENT_HELLO, client_key)
+    monkeypatch.setattr(cp, "_read_json", lambda sock, expected: hello)
+    sock, peer = socket.socketpair()
+    try:
+        with pytest.raises(NLSControlError, match="certificate rejected"):
+            cp.server_handshake(sock, Ed25519PrivateKey.generate(), "ca-test",
+                                authorize_client=lambda _hello: {})
+    finally:
+        sock.close()
+        peer.close()
