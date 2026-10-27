@@ -7,6 +7,19 @@ Companion implementation/design:
 - NetOS implementation tracker: https://github.com/TamilSelvam22112003/NlsxNetOS-v0.1.0/issues/67
 - Core tracker: https://github.com/TamilSelvam22112003/Nls-NexOS-Core-v0.1.0/issues/15
 
+## Implementation alignment note (2026-10-27)
+
+The companion NetOS draft branch now contains a feature-gated destination-preserving NLR1/NLE2 data path and an `nls-endpoint-agent` receive/decrypt/inject plus response-encapsulation loop. This is implementation progress, not protocol acceptance.
+
+- NLR1 protects the prior-hop source locator and opaque inner NLE2 envelope with a direction-specific authenticated hop session key.
+- NLE2 encrypts the complete original IP packet to the endpoint's registered RSA encryption key and signs the envelope with the origin router/endpoint Ed25519 identity.
+- A destination router forwards a server-owned NLE2 envelope without decrypting it; the server endpoint agent verifies the origin against active Router-CA entries, decrypts it, and injects the recovered packet into its TUN interface.
+- For the reverse direction, the endpoint agent routes configured remote prefixes through its TUN, encrypts response packets to the destination router's registered key, and sends NLE2 to the local router for NLR1 forwarding.
+- The current draft uses per-packet RSA-OAEP wrapping rather than a negotiated forward-secret endpoint session. It does not meet the final authenticated key-agreement requirement yet and must not be represented as a final protocol.
+- The exact-head CI and multi-router WAN packet-capture gates have not yet passed; IPv6 outer fragmentation/reassembly must be tested.
+
+The implementation is feature-gated and does not change the default/released NLE1 data path. Core wire-format/state-machine approval, revocation behavior, replay lifetime, return-path behavior, and a versioned interoperability contract remain required before release.
+
 ## 1. Security properties and limits
 
 The profile aims to prevent a passive observer on an untrusted relay-to-relay Internet link from recovering original client/server IP addresses, inner transport ports, endpoint certificates, stable endpoint identifiers, prior-hop locator history, or application payload from cleartext IP/UDP/NLS framing.
