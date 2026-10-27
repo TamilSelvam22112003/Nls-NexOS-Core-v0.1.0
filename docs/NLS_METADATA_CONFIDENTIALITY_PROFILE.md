@@ -88,3 +88,12 @@ Core and NetOS acceptance must include:
 - MTU, fragmentation, ICMPv6 Packet Too Big, restart and bidirectional traffic tests.
 
 A capture containing no decodable NLS packets is inconclusive and MUST NOT pass. AES-GCM unit tests alone do not prove metadata confidentiality.
+
+
+## 10. Normative source-address handling clarification
+
+The NLS source-address requirement is **hop-scoped source-metadata confidentiality**: the relay packages the preceding/current relay's source-locator metadata inside an authenticated encrypted hop envelope addressed to the next authorized relay. The next relay decrypts that envelope with the hop/session key established for it (the next relay's public key may authenticate or establish that session; do not use unauthenticated raw public-key encryption as a substitute for an AEAD session), validates the locator and policy, and uses its own routable WAN locator as the source of the newly emitted outer IPv6 packet when forwarding onward. The forwarding relay may retain the authenticated prior-hop locator only for the scoped operation that requires it; it must not expose it in clear NLS framing or logs.
+
+**Wire-level limitation:** this encrypted source-locator field is metadata carried inside the envelope; it does not encrypt or replace the actual outer IPv6 Source Address field. The actual outer IPv6 source remains the current relay's routable WAN address and is visible to the next relay and to on-path observers. Ordinary Internet IPv6 forwarding cannot deliver a packet to a next hop if the routable outer destination is encrypted in place. If the requirement is to hide even the current relay's actual WAN source address from passive Internet observers, that requires an additional outer tunnel/cover endpoint; it cannot be achieved by encrypting the source field while keeping the same ordinary IPv6 packet routable.
+
+The normative inner hop plaintext must therefore include an authenticated previous_hop_source_locator (address family + normalized address) in addition to the encrypted next_hop_locator and opaque inner envelope. The Core and NetOS codecs and cross-repository test vectors must agree on this field before the profile is considered implementable. Tests must assert that this locator appears only inside ciphertext, that the receiving relay recovers it only with its authorized hop key, and that the forwarded outer source is the forwarding relay's configured WAN locator.
